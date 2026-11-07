@@ -34,7 +34,7 @@
       avatar: '', pic: '',            /* v26：自定义宠物图（压缩后的 dataURL） */
       earned: { checkin: false, oral: 0, dict: 0, master: 0 }, log: []
     },
-    /* v35：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
+    /* v36：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
     sync: {
       token: '', owner: '', repo: 'xiaobu-sync', on: false,
       lastAt: 0, sha: '', updatedAt: 0, device: '', err: ''
@@ -64,11 +64,11 @@
     // v26 首次升级：自定义宠物图，老数据补空字符串（表示用默认天禄）
     db.pet.avatar = typeof db.pet.avatar === 'string' ? db.pet.avatar : '';
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
-    // v35：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
+    // v36：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
     db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
     if (!db.sync.device) db.sync.device = uid();
   } catch (e) { db = defaultDB(); }
-  /* v35：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
+  /* v36：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
   const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0 };
   function scheduleSync(ms) {
     if (!db || !db.sync || !db.sync.on || !db.sync.token) return;
@@ -83,7 +83,7 @@
     return true;
   };
 
-  /* ================= v35 · 家庭同步 =================
+  /* ================= v36 · 家庭同步 =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -2199,7 +2199,7 @@
       toast(rate >= 1 ? '太棒了！全部完成，获得 ' + stars + ' 颗星星' : '打卡成功，完成 ' + Math.round(rate * 100) + '%，获得 ' + stars + ' 颗星星');
     },
 
-    /* ---- v35 家庭同步 ---- */
+    /* ---- v36 家庭同步 ---- */
     'sync-start'() {
       openModal('<div class="modal wide">' + modalHead('开启家庭同步') +
         '<div class="tiny muted" style="line-height:2">' +
@@ -2388,9 +2388,9 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v35 · 家庭同步</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v36 · 家庭同步</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
-        '<div class="divider"></div><div class="tiny muted">所有数据只保存在这台设备，不会上传到服务器。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
+        '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
         '<div class="tiny muted" style="line-height:1.8">在<b>旧图标</b>里点「复制备份文本」，回主屏幕打开<b>新图标</b>，进设置点「粘贴导入」，打卡、星星、积分、错题会原样带走。两个图标都装好后操作，前后只要 30 秒。</div>' +
         '<div class="btn-row" style="margin-top:8px">' +
@@ -3230,7 +3230,7 @@
 
   /* ---------------- 启动 ---------------- */
   render();
-  /* v35：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
+  /* v36：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
   if (db.sync && db.sync.on && db.sync.token) {
     setTimeout(() => { syncNow('boot'); }, 2500);
     setInterval(() => {

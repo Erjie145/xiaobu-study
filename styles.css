@@ -810,7 +810,7 @@ html[data-orient="portrait"] .shop-grid{grid-template-columns:repeat(auto-fill,m
   50%{transform:scale(1.09);filter:drop-shadow(0 0 9px rgba(160,120,255,.7))}
 }
 
-/* ---------- v35 手机底部「设置」tab ---------- */
+/* ---------- v36 手机底部「设置」tab ---------- */
 @media(max-width:767px){
   /* 7 个 tab 平分一行，字略缩一点，窄到 320px 也不折行 */
   .mobile-nav .nav-item{flex:1 1 0;min-width:0;padding:6px 1px;font-size:10px}
@@ -818,7 +818,7 @@ html[data-orient="portrait"] .shop-grid{grid-template-columns:repeat(auto-fill,m
   .mobile-nav .nav-item .icon{width:20px;height:20px}
 }
 
-/* ---------- v35 家庭同步 ---------- */
+/* ---------- v36 家庭同步 ---------- */
 .sync-box{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
 .sync-box.on{background:linear-gradient(135deg,#f2f8f4,#f7f5ff);border-color:#e4e2f5}
 .sync-title{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px}
