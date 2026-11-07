@@ -468,7 +468,10 @@
     const html = NAV.map(n => '<button class="nav-item ' + (S.tab === n.id ? 'active' : '') + '" data-action="nav" data-tab="' + n.id + '">' +
       ic(n.icon) + '<span>' + n.name + '</span>' + (n.id === 'mistakes' && badge ? '<span class="dot">' + badge + '</span>' : '') + '</button>').join('');
     $('#nav').innerHTML = html;
-    $('#mobileNav').innerHTML = html;
+    /* 手机底部导航多一个「设置」：手机上侧栏是隐藏的，顶栏统计条塞不下齿轮，
+       直接做成常驻 tab 最稳，任何屏幕宽度都能点到 */
+    $('#mobileNav').innerHTML = html +
+      '<button class="nav-item" data-action="open-settings">' + ic('settings') + '<span>设置</span></button>';
   }
   function renderTop() {
     const h = new Date().getHours();
@@ -483,7 +486,6 @@
       '<div class="stat sun">' + ic('star') + '<span>星星</span><b>' + st.totalStars + '</b></div>' +
       '<div class="stat flame">' + ic('flame') + '<span>连续</span><b>' + streak() + ' 天</b></div>' +
       '<div class="stat cal hide-sm">' + ic('calendar') + '<span>已打卡</span><b>' + st.totalCheckins + ' 天</b></div>' +
-      '<button class="stat gear-btn" data-action="open-settings" aria-label="设置">' + ic('settings') + '<span>设置</span></button>' +
       '</div>';
   }
   function renderSide() {
@@ -715,12 +717,12 @@
   }
   /* v26：宠物形象可自定义。首页用小图（avatar），小窝用大图（pic），
      只传了一张就两张都用它；都没传就用内置的天禄。 */
-  function petPic() { return db.pet.pic || db.pet.avatar || 'icons/pipi-lg.png?v=33'; }
+  function petPic() { return db.pet.pic || db.pet.avatar || 'icons/pipi-lg.png?v=34'; }
   /* v15：天禄改为静态头像（pipi-lg.png），点击仍会说话 */
   function petCardHtml() {
     return '<div class="pet-card" data-action="pet-pat" role="button" aria-label="点一点天禄，听它给你加油">' +
       '<div class="pet-avatar"><img class="' + (db.pet.avatar ? 'custom' : '') + '" src="' +
-      esc(db.pet.avatar || 'icons/pipi-lg.png?v=33') + '" alt="天禄"></div>' +
+      esc(db.pet.avatar || 'icons/pipi-lg.png?v=34') + '" alt="天禄"></div>' +
       '<div class="pet-bubble"><div class="pet-name">' + ic('sparkles', 'sm') + ' 天禄 · 你的学习搭子' +
       '<span class="pet-hint">点我说话</span></div>' +
       '<div id="petLine">' + petLine() + '</div></div></div>';
@@ -1454,7 +1456,7 @@
   function refreshPetLook() {
     const a = document.getElementById('plAvatar');
     const p = document.getElementById('plPic');
-    if (a) { a.src = db.pet.avatar || 'icons/pipi-lg.png?v=33'; a.className = db.pet.avatar ? 'custom' : ''; }
+    if (a) { a.src = db.pet.avatar || 'icons/pipi-lg.png?v=34'; a.className = db.pet.avatar ? 'custom' : ''; }
     if (p) { p.src = petPic(); p.className = db.pet.pic ? 'custom' : ''; }
   }
 
@@ -1934,7 +1936,7 @@
 
         '<div class="divider"></div><div class="section-title">宠物形象（自定义上传）</div>' +
         '<div class="pet-look">' +
-          '<div class="pl-item"><div class="pl-box"><img id="plAvatar" src="' + esc(db.pet.avatar || 'icons/pipi-lg.png?v=33') + '" alt="首页头像"></div>' +
+          '<div class="pl-item"><div class="pl-box"><img id="plAvatar" src="' + esc(db.pet.avatar || 'icons/pipi-lg.png?v=34') + '" alt="首页头像"></div>' +
             '<span>首页头像</span>' +
             '<button class="btn ghost sm" data-action="pet-img" data-which="avatar">' + ic('image', 'sm') + '上传</button></div>' +
           '<div class="pl-item"><div class="pl-box tall"><img id="plPic" src="' + esc(petPic()) + '" alt="小窝里的天禄"></div>' +
@@ -1977,7 +1979,7 @@
         '<div class="tiny muted" style="margin-top:6px">默认 <b>8 分钟做 5 道题</b>，题数 1–30、时间 1–60 分钟都能改；时间到自动交卷，没写完的算错。拍照检查支持数学 / 语文 / 英语，照片会发到免费 OCR 服务（ocr.space）读文字，本应用不保存照片。AI 讲错题用设备自带普通话语音，不需要联网。</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v33 · 手机设置入口</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v34 · 手机底部设置</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">所有数据只保存在这台设备，不会上传到服务器。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
