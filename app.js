@@ -33,6 +33,11 @@
       points: 0, food: {}, fed: 0, fondness: 0, day: '',
       avatar: '', pic: '',            /* v26：自定义宠物图（压缩后的 dataURL） */
       earned: { checkin: false, oral: 0, dict: 0, master: 0 }, log: []
+    },
+    /* v35：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
+    sync: {
+      token: '', owner: '', repo: 'xiaobu-sync', on: false,
+      lastAt: 0, sha: '', updatedAt: 0, device: '', err: ''
     }
   });
   let db;
@@ -59,11 +64,344 @@
     // v26 首次升级：自定义宠物图，老数据补空字符串（表示用默认天禄）
     db.pet.avatar = typeof db.pet.avatar === 'string' ? db.pet.avatar : '';
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
+    // v35：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
+    db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
+    if (!db.sync.device) db.sync.device = uid();
   } catch (e) { db = defaultDB(); }
+  /* v35：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
+  const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0 };
+  function scheduleSync(ms) {
+    if (!db || !db.sync || !db.sync.on || !db.sync.token) return;
+    clearTimeout(SYNC.timer);
+    SYNC.timer = setTimeout(() => { syncNow('edit'); }, ms || 6000);
+  }
+
   const save = () => {
-    try { localStorage.setItem(KEY, JSON.stringify(db)); return true; }
+    try { localStorage.setItem(KEY, JSON.stringify(db)); }
     catch (e) { toast('本机存储写入失败，请检查浏览器设置（可能是自定义图片太大）'); return false; }
+    if (!SYNC.lock) { db.sync.updatedAt = Date.now(); scheduleSync(8000); }
+    return true;
   };
+
+  /* ================= v35 · 家庭同步 =================
+   * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
+   * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
+   */
+  const GH_API = 'https://api.github.com';
+  const SYNC_FILE = 'data.json';
+  const SYNC_VER = 1;
+
+  const b64enc = str => {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 8192) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    }
+    return btoa(bin);
+  };
+  const b64dec = str => {
+    const bin = atob(String(str || '').replace(/\s+/g, ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  };
+  /* 稳定的序列化（键排序），用来判断两份数据是否等价 */
+  function stable(v) {
+    if (Array.isArray(v)) return '[' + v.map(stable).join(',') + ']';
+    if (v && typeof v === 'object') {
+      return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
+    }
+    return JSON.stringify(v);
+  }
+  function stripForUpload(src) {
+    const c = JSON.parse(stable(src));   // 顺带去掉 undefined / 原型
+    c.sync = { updatedAt: src.sync.updatedAt || 0, device: src.sync.device || '' };
+    return c;
+  }
+  /* 导出 / 复制备份用：永远不带令牌，避免备份文件被转发时泄露账号钥匙 */
+  function exportSnapshot(pretty) {
+    const c = JSON.parse(JSON.stringify(db));
+    if (c.sync) { c.sync.token = ''; c.sync.sha = ''; }
+    return pretty ? JSON.stringify(c, null, 2) : JSON.stringify(c);
+  }
+  function persist(message) {
+    try { localStorage.setItem(KEY, JSON.stringify(db)); }
+    catch (e) { if (message) toast('本机存储写入失败，可能是自定义图片太大'); }
+  }
+
+  async function gh(path, opt) {
+    const o = opt || {};
+    const headers = { 'Accept': 'application/vnd.github+json' };
+    if (db.sync.token) headers['Authorization'] = 'Bearer ' + db.sync.token;
+    if (o.body) headers['Content-Type'] = 'application/json';
+    const res = await fetch(GH_API + path, {
+      method: o.method || 'GET',
+      headers,
+      body: o.body ? JSON.stringify(o.body) : undefined,
+      cache: 'no-store'   // GitHub API 带 max-age，浏览器缓存会让我们拿到旧 sha，导致 409
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { data = null; }
+    return { status: res.status, ok: res.ok, data };
+  }
+
+  /* 首次连接：拿到账号名；没有仓库就建一个私有仓库 */
+  async function ensureRepo() {
+    if (!db.sync.owner) {
+      const me = await gh('/user');
+      if (me.status === 401) throw new Error('令牌无效或已过期，请重新生成');
+      if (!me.ok || !me.data || !me.data.login) throw new Error('读不到 GitHub 账号信息（' + me.status + '）');
+      db.sync.owner = me.data.login;
+      persist();
+    }
+    const path = '/repos/' + db.sync.owner + '/' + db.sync.repo;
+    const r = await gh(path + '?t=' + Date.now());
+    if (r.status === 200) return;
+    if (r.status !== 404) throw new Error('访问仓库失败（' + r.status + '）');
+    const created = await gh('/user/repos', {
+      method: 'POST',
+      body: {
+        name: db.sync.repo, private: true, auto_init: true,
+        description: '小步陪伴 · 家庭同步数据（请勿删除）'
+      }
+    });
+    if (!created.ok && created.status !== 422) throw new Error('创建同步仓库失败（' + created.status + '）');
+    await new Promise(r2 => setTimeout(r2, 1200));   // 新仓库要等几秒才可写
+  }
+
+  async function pullRemote() {
+    const base = '/repos/' + db.sync.owner + '/' + db.sync.repo + '/contents/' + SYNC_FILE;
+    for (let i = 0; i < 3; i++) {
+      // 每次带一个新的时间戳：GitHub 的 CDN 会缓存 GET 响应，
+      // 不加的话刚写完立刻读回来的还是旧 sha，PUT 必然 409
+      const r = await gh(base + '?ref=main&t=' + Date.now() + '-' + i);
+      if (r.status === 404) return null;
+      if (r.ok && r.data && r.data.content) {
+        try {
+          const payload = JSON.parse(b64dec(r.data.content));
+          return { sha: r.data.sha, payload: payload };
+        } catch (e) { return null; }
+      }
+      await new Promise(r2 => setTimeout(r2, 800));
+    }
+    throw new Error('下载同步数据失败');
+  }
+
+  async function putRemote(payload, sha) {
+    const p = '/repos/' + db.sync.owner + '/' + db.sync.repo + '/contents/' + SYNC_FILE;
+    const body = {
+      message: 'sync from ' + (db.sync.device || 'device') + ' @ ' + new Date().toISOString(),
+      content: b64enc(JSON.stringify(payload))
+    };
+    if (sha) body.sha = sha;
+    const r = await gh(p, { method: 'PUT', body });
+    if (r.status === 409 || r.status === 422) return { conflict: true, msg: (r.data && r.data.message) || '' };
+    if (!r.ok) throw new Error('上传失败（' + r.status + '）' + ((r.data && r.data.message) ? '：' + r.data.message : ''));
+    return { sha: r.data && r.data.content ? r.data.content.sha : sha };
+  }
+
+  /* 合并：记录类按条目取并集，标量类取较大值，设置类以较新的一边为准 */
+  function mergeAll(L, R) {
+    const out = JSON.parse(JSON.stringify(L));
+    const newer = (R.sync && R.sync.updatedAt || 0) > (L.sync && L.sync.updatedAt || 0);
+    let changed = false;
+    const mark = () => { changed = true; };
+
+    // 打卡记录：并集，同一天取星星多的那次
+    const ck = Object.assign({}, out.checkins || {});
+    for (const k in (R.checkins || {})) {
+      const a = ck[k], b = R.checkins[k];
+      if (!a) { ck[k] = b; mark(); }
+      else if ((b.stars | 0) > (a.stars | 0)) { ck[k] = Object.assign({}, a, { stars: b.stars }); mark(); }
+    }
+    out.checkins = ck;
+
+    // 作业条目：按日期 + id 并集，只要有一边打了钩就算完成
+    const tk = Object.assign({}, out.tasks || {});
+    for (const d in (R.tasks || {})) {
+      const mine = (tk[d] || []).slice();
+      const map = new Map(mine.map(t => [t.id, t]));
+      let add = false;
+      for (const t of R.tasks[d]) {
+        const e = map.get(t.id);
+        if (!e) { map.set(t.id, t); add = true; }
+        else if (t.done && !e.done) { map.set(t.id, Object.assign({}, e, { done: true })); add = true; }
+      }
+      if (add) { tk[d] = Array.from(map.values()); mark(); }
+    }
+    out.tasks = tk;
+
+    // 错题本：按 id 并集，讲懂过就算讲懂
+    const mkMap = new Map((out.mistakes || []).map(m => [m.id, m]));
+    for (const m of (R.mistakes || [])) {
+      const e = mkMap.get(m.id);
+      if (!e) { mkMap.set(m.id, m); mark(); }
+      else if (m.mastered && !e.mastered) { mkMap.set(m.id, Object.assign({}, e, { mastered: true })); mark(); }
+    }
+    out.mistakes = Array.from(mkMap.values());
+
+    // 自定义词库：按单词去重并集
+    const wMap = new Map((out.customWords || []).map(w => [String(w.word || w).toLowerCase(), w]));
+    for (const w of (R.customWords || [])) {
+      const key = String(w.word || w).toLowerCase();
+      if (!wMap.has(key)) { wMap.set(key, w); mark(); }
+    }
+    out.customWords = Array.from(wMap.values());
+
+    // 计数 / 连续天数 / 星星：取大值，避免来回覆盖导致倒退
+    const cs = Object.assign({}, out.counters || {});
+    for (const k in (R.counters || {})) {
+      if ((R.counters[k] | 0) > (cs[k] | 0)) { cs[k] = R.counters[k]; mark(); }
+    }
+    out.counters = cs;
+    if ((R.stars | 0) > (out.stars | 0)) { out.stars = R.stars; mark(); }
+    if ((R.starUsed | 0) > (out.starUsed | 0)) { out.starUsed = R.starUsed; mark(); }
+    if ((R.bestStreak | 0) > (out.bestStreak | 0)) { out.bestStreak = R.bestStreak; mark(); }
+
+    // 口算最好成绩
+    out.oral = out.oral || { best: {} };
+    out.oral.best = out.oral.best || {};
+    for (const k in ((R.oral && R.oral.best) || {})) {
+      if ((R.oral.best[k] | 0) > (out.oral.best[k] | 0)) { out.oral.best[k] = R.oral.best[k]; mark(); }
+    }
+
+    // 宠物：数值取大，零食按项取大，自定义图片保留有图的一边
+    out.pet = Object.assign({}, out.pet || {});
+    const RP = R.pet || {};
+    ['points', 'fed', 'fondness'].forEach(k => {
+      if ((RP[k] | 0) > (out.pet[k] | 0)) { out.pet[k] = RP[k]; mark(); }
+    });
+    out.pet.food = Object.assign({}, out.pet.food || {});
+    for (const k in (RP.food || {})) {
+      if ((RP.food[k] | 0) > (out.pet.food[k] | 0)) { out.pet.food[k] = RP.food[k]; mark(); }
+    }
+    if ((!out.pet.avatar || out.pet.avatar === '') && RP.avatar) { out.pet.avatar = RP.avatar; mark(); }
+    if ((!out.pet.pic || out.pet.pic === '') && RP.pic) { out.pet.pic = RP.pic; mark(); }
+    if (Array.isArray(RP.log) && RP.log.length) {
+      const seen = new Set((out.pet.log || []).map(x => x.t + '|' + x.k));
+      const add = RP.log.filter(x => !seen.has(x.t + '|' + x.k));
+      if (add.length) { out.pet.log = (out.pet.log || []).concat(add).slice(-200); mark(); }
+    }
+
+    // 设置：首次在这台设备上连接时，整体以已有设备为准；之后按修改时间取新的
+    if ((newer || !(L.sync && L.sync.lastAt)) && R.settings && stable(R.settings) !== stable(out.settings)) {
+      out.settings = Object.assign({}, out.settings, R.settings); mark();
+    }
+
+    out.sync = Object.assign({}, L.sync);
+    return { data: out, changed };
+  }
+
+  async function syncNow(why) {
+    if (!db.sync.token || !db.sync.on) return null;
+    if (SYNC.busy) return SYNC.busy;
+    SYNC.state = 'syncing';
+    paintSync();
+    let changed = false;
+    SYNC.busy = (async () => {
+      try {
+        await ensureRepo();
+        const remote = await pullRemote();
+        let sha = remote ? remote.sha : '';
+
+        if (remote && remote.payload && remote.payload.data) {
+          const before = stable(stripForUpload(db));
+          const merged = mergeAll(db, remote.payload.data);
+          if (merged.changed && stable(stripForUpload(merged.data)) !== before) {
+            SYNC.lock = true;
+            db = merged.data;
+            db.sync.updatedAt = Math.max(db.sync.updatedAt || 0, remote.payload.updatedAt || 0) + 1;
+            SYNC.lock = false;
+            persist();
+            changed = true;
+          }
+        }
+
+        const local = stripForUpload(db);
+        const same = remote && remote.payload && remote.payload.data &&
+          stable(remote.payload.data) === stable(local);
+        if (!same) {
+          const payload = { v: SYNC_VER, updatedAt: db.sync.updatedAt || Date.now(), device: db.sync.device, data: local };
+          let r = await putRemote(payload, sha);
+          if (r.conflict) {
+            // 另一端刚写过：重新拉、再合并、再推一次
+            const fresh = await pullRemote();
+            if (fresh && fresh.payload && fresh.payload.data) {
+              const m2 = mergeAll(db, fresh.payload.data);
+              if (m2.changed) { SYNC.lock = true; db = m2.data; SYNC.lock = false; changed = true; }
+            }
+            payload.data = stripForUpload(db);
+            payload.updatedAt = db.sync.updatedAt = Date.now();
+            r = await putRemote(payload, fresh ? fresh.sha : '');
+            if (r.conflict) throw new Error('两台设备同时改动，稍后会自动重试 [' + (r.msg || '') + ']');
+          }
+          sha = r.sha;
+        }
+
+        db.sync.sha = sha;
+        db.sync.lastAt = Date.now();
+        db.sync.err = '';
+        SYNC.state = 'ok';
+        SYNC.tries = 0;
+      } catch (e) {
+        SYNC.state = 'err';
+        SYNC.err = String((e && e.message) || e);
+        db.sync.err = SYNC.err;
+      } finally {
+        SYNC.busy = null;
+        SYNC.lock = false;
+        persist();
+        paintSync();
+        if (changed) { try { render(); } catch (e) {} }
+      }
+      return SYNC.state;
+    })();
+    return SYNC.busy;
+  }
+
+  function syncAgo(ts) {
+    if (!ts) return '还没同步过';
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 45) return '刚刚同步';
+    if (s < 3600) return Math.floor(s / 60) + ' 分钟前同步';
+    if (s < 86400) return Math.floor(s / 3600) + ' 小时前同步';
+    return Math.floor(s / 86400) + ' 天前同步';
+  }
+
+  function syncBoxHtml() {
+    const s = db.sync;
+    if (!s.on || !s.token) {
+      return '<div class="sync-box">' +
+        '<div class="sync-title">' + ic('refresh', 'sm') + ' 两台设备共用一份记录</div>' +
+        '<div class="tiny muted" style="line-height:1.85;margin:6px 0 10px">平板和手机登录同一个 GitHub 账号，就能自动同步打卡、星星、错题和宠物。' +
+        '数据存在你自己的私有仓库里，别人看不到，也不需要额外的服务器。</div>' +
+        '<button class="btn sm" data-action="sync-start">' + ic('refresh', 'sm') + '连接并开启同步</button></div>';
+    }
+    const st = SYNC.state;
+    const dot = st === 'err' ? 'var(--coral)' : st === 'syncing' ? 'var(--sun)' : 'var(--green, #35b37e)';
+    const txt = st === 'syncing' ? '正在同步…'
+      : st === 'err' ? ('同步失败：' + esc(SYNC.err || ''))
+      : syncAgo(s.lastAt);
+    return '<div class="sync-box on">' +
+      '<div class="sync-line"><i class="sync-dot" style="background:' + dot + '"></i>' +
+      '<b>' + esc(s.owner || '已连接') + ' / ' + esc(s.repo) + '</b></div>' +
+      '<div class="tiny muted" style="margin:4px 0 10px">' + txt + '</div>' +
+      '<div class="btn-row">' +
+      '<button class="btn ghost sm" data-action="sync-now">' + ic('refresh', 'sm') + '立即同步</button>' +
+      '<button class="btn ghost sm" data-action="sync-off" style="color:var(--coral)">关闭同步</button></div></div>';
+  }
+  function paintSync() {
+    const box = document.getElementById('syncBox');
+    if (box) box.innerHTML = syncBoxHtml();
+  }
+
+  /* 打开浏览器可见时补一次同步（iOS 从后台回来最常见） */
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && db.sync.on && db.sync.token) {
+      setTimeout(() => { syncNow('visible'); }, 1200);
+    }
+  });
+
 
   /* ---------------- v25 · 学习难度与课本 ---------------- */
   const BOOKS = [
@@ -717,12 +1055,12 @@
   }
   /* v26：宠物形象可自定义。首页用小图（avatar），小窝用大图（pic），
      只传了一张就两张都用它；都没传就用内置的天禄。 */
-  function petPic() { return db.pet.pic || db.pet.avatar || 'icons/pipi-lg.png?v=34'; }
+  function petPic() { return db.pet.pic || db.pet.avatar || 'icons/pipi-lg.png?v=35'; }
   /* v15：天禄改为静态头像（pipi-lg.png），点击仍会说话 */
   function petCardHtml() {
     return '<div class="pet-card" data-action="pet-pat" role="button" aria-label="点一点天禄，听它给你加油">' +
       '<div class="pet-avatar"><img class="' + (db.pet.avatar ? 'custom' : '') + '" src="' +
-      esc(db.pet.avatar || 'icons/pipi-lg.png?v=34') + '" alt="天禄"></div>' +
+      esc(db.pet.avatar || 'icons/pipi-lg.png?v=35') + '" alt="天禄"></div>' +
       '<div class="pet-bubble"><div class="pet-name">' + ic('sparkles', 'sm') + ' 天禄 · 你的学习搭子' +
       '<span class="pet-hint">点我说话</span></div>' +
       '<div id="petLine">' + petLine() + '</div></div></div>';
@@ -1456,7 +1794,7 @@
   function refreshPetLook() {
     const a = document.getElementById('plAvatar');
     const p = document.getElementById('plPic');
-    if (a) { a.src = db.pet.avatar || 'icons/pipi-lg.png?v=34'; a.className = db.pet.avatar ? 'custom' : ''; }
+    if (a) { a.src = db.pet.avatar || 'icons/pipi-lg.png?v=35'; a.className = db.pet.avatar ? 'custom' : ''; }
     if (p) { p.src = petPic(); p.className = db.pet.pic ? 'custom' : ''; }
   }
 
@@ -1861,6 +2199,74 @@
       toast(rate >= 1 ? '太棒了！全部完成，获得 ' + stars + ' 颗星星' : '打卡成功，完成 ' + Math.round(rate * 100) + '%，获得 ' + stars + ' 颗星星');
     },
 
+    /* ---- v35 家庭同步 ---- */
+    'sync-start'() {
+      openModal('<div class="modal wide">' + modalHead('开启家庭同步') +
+        '<div class="tiny muted" style="line-height:2">' +
+        '<b>1.</b> 点下面的按钮打开 GitHub（先在这台设备上登录自己的账号）。<br>' +
+        '<b>2.</b> Note 随便写（例如 xiaobu），Expiration 选 <b>No expiration</b>，Scopes 只勾 <b>repo</b>（已经帮你预选好）。<br>' +
+        '<b>3.</b> 拉到底点 <b>Generate token</b>，复制那串 <b>ghp_</b> 开头的字符。<br>' +
+        '<b>4.</b> 粘到下面，点「连接」。' +
+        '</div>' +
+        '<div class="btn-row" style="margin:14px 0 10px"><a class="btn sm" href="https://github.com/settings/tokens/new?scopes=repo&description=xiaobu-study-sync" target="_blank" rel="noopener">' + ic('arrow', 'sm') + '去 GitHub 创建令牌</a></div>' +
+        '<div class="field"><label>粘贴令牌（只保存在这台设备）</label>' +
+        '<input class="input" id="syncToken" placeholder="ghp_..." autocomplete="off" autocapitalize="off" spellcheck="false"></div>' +
+        '<div class="tiny muted" style="margin-top:8px;line-height:1.8">令牌相当于这个账号的钥匙，<b>只存在本机浏览器里</b>，不会上传到别处，随时能在 GitHub 设置里撤销。' +
+        '另一台设备用<b>同一个账号</b>重复一次这一步，两台就开始自动同步了。</div>' +
+        '<div class="modal-foot" style="margin-top:14px"><button class="btn ghost" data-action="close-modal">取消</button>' +
+        '<button class="btn" data-action="sync-save">连接</button></div></div>');
+    },
+    async 'sync-save'() {
+      const el = document.getElementById('syncToken');
+      const t = (el ? el.value : '').trim().replace(/\s+/g, '');
+      if (!t) { toast('先把令牌粘贴进来'); return; }
+      if (!/^(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})$/.test(t)) {
+        toast('格式不对，应该是以 ghp_ 开头的一长串'); return;
+      }
+      const btn = document.querySelector('[data-action="sync-save"]');
+      if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
+      const old = db.sync.token;
+      db.sync.token = t;
+      try {
+        const me = await gh('/user');
+        if (me.status === 401) throw new Error('令牌无效，检查有没有复制完整');
+        if (!me.ok || !me.data || !me.data.login) throw new Error('连接失败（' + me.status + '）');
+        db.sync.owner = me.data.login;
+        db.sync.on = true;
+        db.sync.updatedAt = Date.now();
+        persist();
+        closeModal();
+        toast('已连接 ' + me.data.login + '，正在同步…');
+        await syncNow('connect');
+        if (SYNC.state === 'err') toast('连接成功，但同步出错：' + SYNC.err);
+        H['open-settings']();
+      } catch (e) {
+        db.sync.token = old;
+        db.sync.on = false;
+        persist();
+        if (btn) { btn.disabled = false; btn.textContent = '连接'; }
+        toast(String((e && e.message) || e));
+      }
+    },
+    'sync-now'() {
+      if (SYNC.busy) { toast('正在同步，稍等一下'); return; }
+      syncNow('manual').then(st => {
+        if (st === 'ok') toast('已同步 · ' + syncAgo(db.sync.lastAt));
+        else if (st === 'err') toast('同步失败：' + SYNC.err);
+      });
+    },
+    'sync-off'() {
+      openModal('<div class="modal">' + modalHead('关闭同步？') +
+        '<div class="tiny muted" style="line-height:1.9">关闭后这台设备不再上传和下载，<b>本机记录完整保留</b>，GitHub 上的同步文件也不会删除。以后想再开，重新连接一次即可。</div>' +
+        '<div class="modal-foot" style="margin-top:14px"><button class="btn ghost" data-action="close-modal">再想想</button>' +
+        '<button class="btn coral" data-action="sync-off-confirm">关闭同步</button></div></div>');
+    },
+    'sync-off-confirm'() {
+      db.sync.on = false; db.sync.token = ''; db.sync.sha = ''; db.sync.err = '';
+      persist(); closeModal(); toast('已关闭同步，本机记录都还在');
+      H['open-settings']();
+    },
+
     /* 设置 */
     'open-settings'() {
       S.draft = JSON.parse(JSON.stringify(db.settings));
@@ -1936,7 +2342,7 @@
 
         '<div class="divider"></div><div class="section-title">宠物形象（自定义上传）</div>' +
         '<div class="pet-look">' +
-          '<div class="pl-item"><div class="pl-box"><img id="plAvatar" src="' + esc(db.pet.avatar || 'icons/pipi-lg.png?v=34') + '" alt="首页头像"></div>' +
+          '<div class="pl-item"><div class="pl-box"><img id="plAvatar" src="' + esc(db.pet.avatar || 'icons/pipi-lg.png?v=35') + '" alt="首页头像"></div>' +
             '<span>首页头像</span>' +
             '<button class="btn ghost sm" data-action="pet-img" data-which="avatar">' + ic('image', 'sm') + '上传</button></div>' +
           '<div class="pl-item"><div class="pl-box tall"><img id="plPic" src="' + esc(petPic()) + '" alt="小窝里的天禄"></div>' +
@@ -1978,8 +2384,11 @@
         '<div class="field"><label>OCR 识别 Key（可留空）</label><input class="input" data-model="draft.ocrKey" value="' + esc(d.ocrKey || '') + '" placeholder="留空用免费额度"></div></div>' +
         '<div class="tiny muted" style="margin-top:6px">默认 <b>8 分钟做 5 道题</b>，题数 1–30、时间 1–60 分钟都能改；时间到自动交卷，没写完的算错。拍照检查支持数学 / 语文 / 英语，照片会发到免费 OCR 服务（ocr.space）读文字，本应用不保存照片。AI 讲错题用设备自带普通话语音，不需要联网。</div>' +
 
+        '<div class="divider"></div><div class="section-title">家庭同步（手机 ⇄ 平板）</div>' +
+        '<div id="syncBox">' + syncBoxHtml() + '</div>' +
+
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v34 · 手机底部设置</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v35 · 家庭同步</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">所有数据只保存在这台设备，不会上传到服务器。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -1997,7 +2406,7 @@
     /* 换图标搬数据：复制 / 粘贴（iOS 主屏幕应用之间的存储互相隔离，系统剪贴板是共享的） */
     'import-open'() { const i = document.getElementById('importFile'); if (i) i.click(); },
     'export-clip'() {
-      const txt = JSON.stringify(db);
+      const txt = exportSnapshot();
       const fallback = () => {
         openModal('<div class="modal">' + modalHead('手动复制备份文本') +
           '<div class="tiny muted" style="margin-bottom:8px">点一下下面的方框 → 全选 → 拷贝。然后回主屏幕打开新图标，进设置点「粘贴导入」。</div>' +
@@ -2117,7 +2526,7 @@
       save(); closeModal(); render(); toast('设置已保存');
     },
     'export-data'() {
-      const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+      const blob = new Blob([exportSnapshot(true)], { type: 'application/json' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
       a.download = '小步陪伴-备份-' + today() + '.json'; a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000); toast('备份已下载');
@@ -2166,12 +2575,17 @@
     },
     'import-confirm'() {
       const p = S.pendingImport; if (!p) { closeModal(); return; }
+      const keep = { token: db.sync ? db.sync.token : '', owner: db.sync ? db.sync.owner : '' };
       db = Object.assign(defaultDB(), p);
       db.settings = Object.assign(defaultDB().settings, p.settings || {});
       db.pet = Object.assign(defaultDB().pet, p.pet || {});
       db.pet.food = db.pet.food || {};
       db.pet.earned = Object.assign({ checkin: false, oral: 0, dict: 0, master: 0 }, db.pet.earned || {});
       db.counters = Object.assign({ dictation: 0, math: 0, oral: 0 }, p.counters || {});
+      db.sync = Object.assign(defaultDB().sync, p.sync || {});
+      db.sync.device = db.sync.device || uid();
+      if (!db.sync.token && keep.token) { db.sync.token = keep.token; if (!db.sync.owner) db.sync.owner = keep.owner; }
+      if (!db.sync.token) db.sync.on = false;
       S.pendingImport = null;
       save(); closeModal(); S.tab = 'home'; render(); toast('备份已恢复');
     },
@@ -2816,4 +3230,11 @@
 
   /* ---------------- 启动 ---------------- */
   render();
+  /* v35：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
+  if (db.sync && db.sync.on && db.sync.token) {
+    setTimeout(() => { syncNow('boot'); }, 2500);
+    setInterval(() => {
+      if (document.visibilityState === 'visible' && !SYNC.busy && db.sync.on) syncNow('tick');
+    }, 120000);
+  }
 })();

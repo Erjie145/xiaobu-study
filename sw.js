@@ -2,8 +2,8 @@
  * v13：所有静态资源带版本号，强制绕过 iPad 上残留的旧 HTTP / SW 缓存。
  * 以后升级：把 CACHE 与 V 一起 +1，并同步 index.html / manifest 里的 ?v= 参数。
  */
-const CACHE = 'xiaobu-v34';
-const V = '?v=34';
+const CACHE = 'xiaobu-v35';
+const V = '?v=35';
 const ASSETS = [
   './',
   'index.html',
@@ -58,6 +58,11 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
+  /* 只处理本站资源。跨域请求（GitHub API 等）交给浏览器直连，
+     否则会把 API 响应一起写进缓存，同步时永远读到旧 sha。 */
+  let reqUrl;
+  try { reqUrl = new URL(req.url); } catch (err) { return; }
+  if (reqUrl.origin !== self.location.origin) return;
 
   // 页面导航：强制走网络，绝不返回旧快照；403/404/断网才回退离线首页
   if (req.mode === 'navigate') {
