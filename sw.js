@@ -1,0 +1,116 @@
+/* 小步陪伴 · Service Worker
+ * v13：所有静态资源带版本号，强制绕过 iPad 上残留的旧 HTTP / SW 缓存。
+ * 以后升级：把 CACHE 与 V 一起 +1，并同步 index.html / manifest 里的 ?v= 参数。
+ */
+const CACHE = 'xiaobu-v33';
+const V = '?v=33';
+const ASSETS = [
+  './',
+  'index.html',
+  'styles.css' + V,
+  'app.js' + V,
+  'data.js' + V,
+  'manifest.webmanifest' + V,
+  'icons/favicon.png' + V,
+  'icons/icon-192.png' + V,
+  'icons/icon-512.png' + V,
+  'icons/apple-touch-icon.png' + V,
+  'icons/pipi.png' + V,
+  'icons/pipi-lg.png' + V,
+  'icons/pipi-sm.png' + V,
+  'audio/manifest.json' + V,
+  'audio/pet/manifest.json' + V
+];
+
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(async c => {
+      // 逐项缓存：单个资源失败不影响整个 SW 安装
+      await Promise.all(ASSETS.map(u => c.add(u).catch(() => {})));
+      // 按清单预缓存全部课本单词的高清发音，断网也能听写
+      try {
+        const r = await fetch('audio/manifest.json' + V, { cache: 'no-store' });
+        if (r.ok) {
+          const list = await r.json();
+          await Promise.all(list.map(u => c.add(u).catch(() => {})));
+        }
+      } catch (err) { /* 清单读取失败不影响应用安装 */ }
+      // 天禄的可爱语音包（三种声线 × 12 句），离线点它也能说话
+      try {
+        const pr = await fetch('audio/pet/manifest.json' + V, { cache: 'no-store' });
+        if (pr.ok) {
+          const pm = await pr.json();
+          await Promise.all((pm.files || []).map(f => c.add('audio/pet/' + f).catch(() => {})));
+        }
+      } catch (err) { /* 语音包没缓存成功也还能在线播放 */ }
+    }).then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', e => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+
+  // 页面导航：强制走网络，绝不返回旧快照；403/404/断网才回退离线首页
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      fetch(req, { cache: 'reload' })
+        .then(res => {
+          if (res.status === 401 || res.status === 403 || res.status === 404) {
+            return caches.match('./index.html').then(r => r || caches.match('./'));
+          }
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put('./index.html', copy));
+          return res;
+        })
+        .catch(() => caches.match('./index.html').then(r => r || caches.match('./')))
+    );
+    return;
+  }
+
+  const path = new URL(req.url).pathname;
+  const isCode = /\.(js|css|html|webmanifest)$/.test(path) || path.endsWith('/');
+
+  // 代码文件：强制走网络，一打开就是最新版；断网或凭据过期时回退缓存
+  if (isCode) {
+    e.respondWith(
+      fetch(req, { cache: 'reload' }).then(res => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(req, copy));
+          return res;
+        }
+        // 403/404（例如分享链接凭据过期）：退回缓存里的上一版，保证页面还能打开
+        return caches.match(req)
+          .then(r => r || caches.match(req, { ignoreSearch: true }))
+          .then(r => r || res);
+      }).catch(() => caches.match(req)
+        .then(r => r || caches.match(req, { ignoreSearch: true }))
+        .then(r => r || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // 音频 / 图标 / 清单：缓存优先，离线可播；忽略版本号参数做兜底匹配
+  e.respondWith(
+    caches.match(req).then(hit => hit ||
+      caches.match(req, { ignoreSearch: true }).then(h2 => h2 ||
+        fetch(req).then(res => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then(c => c.put(req, copy));
+          }
+          return res;
+        })
+      )
+    )
+  );
+});

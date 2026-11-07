@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="theme-color" content="#f6f7fb">
+<meta name="description" content="五年级学习陪伴：每日作业打卡、英语听写、作业拍照检查（数学/语文/英语）与错题讲解">
+<link rel="manifest" href="manifest.webmanifest?v=33">
+<link rel="icon" href="icons/favicon.png?v=33" sizes="64x64">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=33">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="小步陪伴">
+<title>小步陪伴 · 每日学习</title>
+<link rel="stylesheet" href="styles.css?v=33">
+<script>
+/* 排障：任何脚本错误直接显示在屏幕顶部，方便远程定位设备差异问题 */
+(function () {
+  function show(msg, color) {
+    var b = document.getElementById('errBanner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'errBanner';
+      b.style.cssText = 'position:fixed;left:8px;right:8px;top:8px;z-index:99999;color:#fff;font:13px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;padding:10px 14px;border-radius:12px;word-break:break-all;box-shadow:0 4px 16px rgba(0,0,0,.28)';
+      (document.body || document.documentElement).appendChild(b);
+    }
+    b.style.background = color || '#b3261e';
+    b.innerHTML = msg;
+  }
+  window.addEventListener('error', function (e) {
+    show('<b>页面脚本出错，请截图发给开发者：</b><br>' + (e.message || '未知脚本错误') + ' @ ' + String(e.filename || '').split('/').pop() + ':' + e.lineno);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+    show('<b>后台任务出错（一般不影响使用）：</b><br>' + r, '#9a6b00');
+  });
+  /* 微信 / QQ 等内置浏览器：引导用 Safari 打开，这类环境会限制存储与功能 */
+  if (/MicroMessenger|MicroMessage|QQ\/|Weibo|WorkBuddy/i.test(navigator.userAgent) || (window.top !== window.self)) {
+    document.addEventListener('DOMContentLoaded', function () {
+      show('<b>检测到你正在 App 内置浏览器中打开。</b>为了能保存学习记录、正常使用全部功能，请点右上角「···」→ 选择「在 Safari 中打开」（或复制链接，粘贴到 Safari 地址栏打开）', '#4f63d2');
+    });
+  }
+})();
+</script>
+</head>
+<body>
+
+<svg class="svg-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+  <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></symbol>
+  <symbol id="i-calc" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="m5 3 14 9-14 9V3z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+  <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5zM15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 16l-5.5-5.5L7 19"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15zM5 3l.7 1.8L7.5 5.5l-1.8.7L5 8l-.7-1.8L2.5 5.5l1.8-.7L5 3z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><img src="icons/pipi-sm.png?v=33" alt="天禄"></div>
+      <div class="brand-text"><strong>小步陪伴</strong><span>天禄陪你，每天一点点</span></div>
+    </div>
+
+    <nav class="nav" id="nav"></nav>
+
+    <div class="side-bottom">
+      <div class="side-card" id="sideProgress"></div>
+      <button class="side-link" data-action="open-install">
+        <svg class="icon"><use href="#i-download"></use></svg><span>装到 iPad</span>
+      </button>
+      <button class="side-link" data-action="open-settings">
+        <svg class="icon"><use href="#i-settings"></use></svg><span>设置</span>
+      </button>
+      <div style="text-align:center;font-size:11px;color:#a7adbf;padding:10px 4px 2px;letter-spacing:.4px">v33 · 手机设置入口</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view" id="view"></div>
+  </main>
+</div>
+
+<nav class="mobile-nav" id="mobileNav"></nav>
+<div id="modalRoot"></div>
+<div id="toast" class="toast"></div>
+
+<script src="data.js?v=33"></script>
+<script src="app.js?v=33"></script>
+<script>
+(function () {
+  /* 手动强制更新：注销全部 SW + 清空全部缓存 + 重载。
+     供 App 内「设置 → 检查更新」按钮调用，以后迭代不用删图标、数据也不丢。 */
+  window.SB_FORCE_UPDATE = function () {
+    var jobs = [];
+    try {
+      if ('serviceWorker' in navigator && navigator.serviceWorker.getRegistrations) {
+        jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+          return Promise.all(rs.map(function (r) { return r.unregister().catch(function () {}); }));
+        }).catch(function () {}));
+      }
+    } catch (e) {}
+    try {
+      if (window.caches && caches.keys) {
+        jobs.push(caches.keys().then(function (ks) {
+          return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+        }).catch(function () {}));
+      }
+    } catch (e) {}
+    try { sessionStorage.removeItem('wb_sw_reloaded'); } catch (e) {}
+    return Promise.all(jobs).then(function () { location.reload(); });
+  };
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      var hadController = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!hadController) return;
+        try {
+          if (sessionStorage.getItem('wb_sw_reloaded')) return;
+          sessionStorage.setItem('wb_sw_reloaded', '1');
+        } catch (e) { return; }
+        location.reload();
+      });
+      navigator.serviceWorker.register('sw.js?v=33').then(function (reg) {
+        // 每次打开都主动向服务器核对一次 SW，避免 iOS 长期不检查更新
+        try { reg.update(); } catch (e) {}
+      }).catch(function () {});
+    });
+  }
+})();
+</script>
+</body>
+</html>
