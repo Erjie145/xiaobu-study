@@ -29,8 +29,9 @@
     tasks: {}, checkins: {}, stars: 0, starUsed: 0, bestStreak: 0,
     mistakes: [], customWords: [], counters: { dictation: 0, math: 0, oral: 0 },
     /* v46：错题删除名单（id → 删除时间）。删掉的错题在另一台设备上还有旧副本，
-       同步时「取并集」会把它复活，所以删除要留下记录一起同步。 */
-    mkDeleted: {},
+       同步时「取并集」会把它复活，所以删除要留下记录一起同步。
+       v47 增加 mkGone：按「科目+题目」记的内容指纹，能清掉另一台 id 不同的同一道题。 */
+    mkDeleted: {}, mkGone: {},
     oral: { best: {} },
     /* 宠物喂养：积分、零食柜、喂食次数、每日积分明细
        pointsIn / pointsOut 是累计获得与累计花掉，只增不减。
@@ -79,13 +80,18 @@
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
     // v46：老数据补上错题删除名单，并把名单里残留的错题清掉
     db.mkDeleted = (db.mkDeleted && typeof db.mkDeleted === 'object' && !Array.isArray(db.mkDeleted)) ? db.mkDeleted : {};
-    if (Array.isArray(db.mistakes)) db.mistakes = db.mistakes.filter(m => m && !db.mkDeleted[m.id]);
+    // v47：内容指纹名单（另一台 id 不同的同一道题）
+    db.mkGone = (db.mkGone && typeof db.mkGone === 'object' && !Array.isArray(db.mkGone)) ? db.mkGone : {};
+    // v47：历史数据里若有两条一模一样的错题（科目+日期+题目相同、id 不同），收成一条
+    const mkBefore = Array.isArray(db.mistakes) ? db.mistakes.length : 0;
+    dedupeMistakes();
+    if (Array.isArray(db.mistakes) && db.mistakes.length !== mkBefore) persist();
     // v41：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
     db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
     if (!db.sync.device) db.sync.device = uid();
   } catch (e) { db = defaultDB(); }
   /* v41：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
-  const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0 };
+  const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0, info: null };
   function scheduleSync(ms) {
     if (!db || !db.sync || !db.sync.on || !db.sync.token) return;
     clearTimeout(SYNC.timer);
@@ -216,19 +222,70 @@
     return { sha: r.data && r.data.content ? r.data.content.sha : sha };
   }
 
+  /* v47 修正：毫秒时间戳超过了 32 位整数，用 `| 0` 会溢出成负数，
+     比较结果全错（墓碑合并不进来）。统一用这个函数读时间戳。 */
+  function TS(v) { const n = Number(v); return isFinite(n) ? n : 0; }
+
+  /* v47：错题的「内容指纹」= 科目 + 题目。
+     两台设备各自记过一次同一道题时 id 不一样，只按 id 删不掉另一台那份；
+     所以删除时也记一条内容指纹，另一台收到后连自己那份一起清掉。 */
+  function mkKey(m) {
+    return (m && m.q) ? (String(m.subject || '') + '\u0001' + String(m.q).trim()) : '';
+  }
+  function mkBuried(m) {
+    if (!m) return true;
+    if (m.id && db.mkDeleted && db.mkDeleted[m.id]) return true;
+    const k = mkKey(m);
+    if (!k || !db.mkGone || !db.mkGone[k]) return false;
+    // 删掉之后又做错的（时间更晚）：算新错题，指纹作废
+    if (TS(m.ts) > TS(db.mkGone[k])) { delete db.mkGone[k]; return false; }
+    return true;
+  }
+
+  /* v47：把「科目 + 日期 + 题目」完全相同的错题收成一条。
+     两台设备各自记过一次，会存成两条内容一样、id 不同的题：孩子看到两道一样的，
+     删掉一条还剩一条，就像是删不掉。收起来的那条也记进删除名单。 */
+  function dedupeMistakes() {
+    if (!Array.isArray(db.mistakes)) { db.mistakes = []; return; }
+    const seen = new Map();
+    db.mistakes = db.mistakes.filter(m => {
+      if (!m) return false;
+      if (mkBuried(m)) return false;
+      const k = [m.subject || '', m.date || '', String(m.q || '').trim()].join('\u0001');
+      const e = seen.get(k);
+      if (!e) { seen.set(k, m); return true; }
+      if (m.mastered && !e.mastered) e.mastered = true;
+      if (!e.note && m.note) e.note = m.note;
+      if (!e.zh && m.zh) e.zh = m.zh;
+      if (!e.tip && m.tip) e.tip = m.tip;
+      buryMistake(m);
+      return false;
+    });
+  }
+
   /* v46：删错题时在本地记一个「墓碑」。
      本来只是从数组里过滤掉，但另一台设备还留着同一道题，同步一合并又回来了。
      墓碑随数据一起同步，合并时按名单剔除，删掉的就真的没了。
+     v47 起同时记 id 和内容指纹：id 只对得上同一份记录，指纹才能清掉另一台那份。
      只增不减，超过 600 条时丢掉最早的（正常一年也删不到这么多）。 */
-  function buryMistake(id) {
-    if (!id) return;
-    db.mkDeleted = db.mkDeleted || {};
-    db.mkDeleted[id] = Date.now();
-    const keys = Object.keys(db.mkDeleted);
-    if (keys.length > 600) {
-      keys.sort((a, b) => (db.mkDeleted[a] | 0) - (db.mkDeleted[b] | 0));
-      keys.slice(0, keys.length - 600).forEach(k => { delete db.mkDeleted[k]; });
-    }
+  function trimMap(o, max) {
+    const keys = Object.keys(o);
+    const lim = max || 600;
+    if (keys.length <= lim) return;
+    keys.sort((a, b) => TS(o[a]) - TS(o[b]));
+    keys.slice(0, keys.length - lim).forEach(k => { delete o[k]; });
+  }
+  function buryMistake(m) {
+    if (!m) return;
+    const id = typeof m === 'string' ? m : m.id;
+    const t = Date.now();
+    db.mkDeleted = (db.mkDeleted && typeof db.mkDeleted === 'object' && !Array.isArray(db.mkDeleted)) ? db.mkDeleted : {};
+    db.mkGone = (db.mkGone && typeof db.mkGone === 'object' && !Array.isArray(db.mkGone)) ? db.mkGone : {};
+    if (id) db.mkDeleted[id] = t;
+    const k = (typeof m === 'object') ? mkKey(m) : '';
+    if (k) db.mkGone[k] = t;
+    trimMap(db.mkDeleted, 600);
+    trimMap(db.mkGone, 600);
   }
 
   /* 合并：记录类按条目取并集，标量类取较大值，设置类以较新的一边为准 */
@@ -264,24 +321,56 @@
 
     // 错题本：先把两边的「已删除」名单合起来，按 id 并集，讲懂过就算讲懂
     const dead = Object.assign({}, out.mkDeleted || {});
+    const gone = Object.assign({}, out.mkGone || {});
     for (const id in (R.mkDeleted || {})) {
-      if ((R.mkDeleted[id] | 0) > (dead[id] | 0)) { dead[id] = R.mkDeleted[id]; mark(); }
+      if (TS(R.mkDeleted[id]) > TS(dead[id])) { dead[id] = R.mkDeleted[id]; mark(); }
     }
-    out.mkDeleted = dead;
+    for (const k in (R.mkGone || {})) {
+      if (TS(R.mkGone[k]) > TS(gone[k])) { gone[k] = R.mkGone[k]; mark(); }
+    }
+    /* id 对得上，或者内容指纹对得上（另一台记的同一道题、id 不同），都算已删 */
+    const buried = m => {
+      if (!m) return true;
+      if (m.id && dead[m.id]) return true;
+      const k = mkKey(m);
+      if (!k || !gone[k]) return false;
+      if (TS(m.ts) > TS(gone[k])) { delete gone[k]; mark(); return false; }   // 删掉以后又做错的新记录
+      return true;
+    };
     const mkLen = (out.mistakes || []).length;
     const mkMap = new Map();
     for (const m of (out.mistakes || [])) {
-      if (!m || dead[m.id]) { mark(); continue; }   // 本地还留着的已删错题：同步时顺手清掉
+      if (!m) { mark(); continue; }
+      if (buried(m)) {
+        if (m.id && !dead[m.id]) dead[m.id] = Date.now();   // 顺手补 id，旧版本设备也能删掉
+        mark(); continue;
+      }
       mkMap.set(m.id, m);
     }
     for (const m of (R.mistakes || [])) {
-      if (!m || dead[m.id]) continue;
+      if (!m || buried(m)) continue;
       const e = mkMap.get(m.id);
       if (!e) { mkMap.set(m.id, m); mark(); }
       else if (m.mastered && !e.mastered) { mkMap.set(m.id, Object.assign({}, e, { mastered: true })); mark(); }
     }
     if (mkMap.size !== mkLen) mark();
     out.mistakes = Array.from(mkMap.values());
+    out.mkDeleted = dead;
+    out.mkGone = gone;
+    /* v47：两台设备各自记下的同一道题（id 不同、内容一样）并集会变成两条，
+       孩子看到两道一模一样的题，删一条还剩一条。这里按「科目+日期+题目」收敛成一条。 */
+    const byQ = new Map();
+    out.mistakes = out.mistakes.filter(m => {
+      const k = [m.subject || '', m.date || '', String(m.q || '').trim()].join('\u0001');
+      const e = byQ.get(k);
+      if (!e) { byQ.set(k, m); return true; }
+      if (m.mastered && !e.mastered) e.mastered = true;
+      if (!e.note && m.note) e.note = m.note;
+      if (!e.zh && m.zh) e.zh = m.zh;
+      if (!e.tip && m.tip) e.tip = m.tip;
+      mark();
+      return false;
+    });
 
     // 自定义词库：按单词去重并集
     const wMap = new Map((out.customWords || []).map(w => [String(w.word || w).toLowerCase(), w]));
@@ -362,6 +451,18 @@
         await ensureRepo();
         const remote = await pullRemote();
         let sha = remote ? remote.sha : '';
+        /* v47：把云端那份的错题情况记下来，设置里能看到「本机几道 / 云端几道」，
+           两台设备对不上时一眼就知道是没同步成功，还是数据真的不一样 */
+        if (remote && remote.payload && remote.payload.data) {
+          const rd = remote.payload.data;
+          SYNC.info = {
+            at: remote.payload.updatedAt || 0, device: remote.payload.device || '',
+            mistakes: (rd.mistakes || []).length,
+            deleted: Object.keys(rd.mkDeleted || {}).length
+          };
+        } else {
+          SYNC.info = { at: 0, device: '', mistakes: 0, deleted: 0, empty: true };
+        }
 
         if (remote && remote.payload && remote.payload.data) {
           const before = stable(stripForUpload(db));
@@ -427,6 +528,16 @@
     return Math.floor(s / 86400) + ' 天前同步';
   }
 
+  /* 把技术错误翻成家长能看懂的一句话 */
+  function syncErrText(e) {
+    const s = String(e || '');
+    if (/Failed to fetch|NetworkError|Load failed|network error|net::/i.test(s)) return '连不上 GitHub（网络问题），换到 Wi-Fi 或稍后再试';
+    if (/401|令牌无效|Bad credentials/i.test(s)) return 'GitHub 令牌失效了，需要重新生成一次再连接';
+    if (/409|422|同时改动/.test(s)) return '两台设备刚好同时改动，点「立即同步」重试一次';
+    if (/403/.test(s)) return 'GitHub 拒绝了这次请求（403），检查令牌权限是否包含仓库读写';
+    return s || '未知原因';
+  }
+
   function syncBoxHtml() {
     const s = db.sync;
     if (!s.on || !s.token) {
@@ -439,14 +550,25 @@
     const st = SYNC.state;
     const dot = st === 'err' ? 'var(--coral)' : st === 'syncing' ? 'var(--sun)' : 'var(--green, #35b37e)';
     const txt = st === 'syncing' ? '正在同步…'
-      : st === 'err' ? ('同步失败：' + esc(SYNC.err || ''))
-      : syncAgo(s.lastAt);
+      : st === 'err' ? ('同步失败：' + esc(syncErrText(SYNC.err || db.sync.err)))
+        : syncAgo(s.lastAt);
+    /* v47：本机与云端的错题对不上时，家长能一眼看出差在哪 */
+    const info = SYNC.info;
+    const mine = db.mistakes.length;
+    const mineDel = Object.keys(db.mkDeleted || {}).length;
+    const diff = !!info && st === 'ok' && info.mistakes !== mine;
+    const infoLine = info && st !== 'err' && st !== 'syncing'
+      ? '<div class="sync-line tiny ' + (diff ? '' : 'muted') + '" style="margin-top:6px">' +
+      '<b>错题：本机 ' + mine + ' 道 · 云端 ' + (info.mistakes | 0) + ' 道</b>' +
+      (mineDel || info.deleted ? '<span class="muted">（删除记录 ' + mineDel + ' / ' + (info.deleted | 0) + '）</span>' : '') + '</div>'
+      : '';
     return '<div class="sync-box on">' +
       '<div class="sync-line"><i class="sync-dot" style="background:' + dot + '"></i>' +
       '<b>' + esc(s.owner || '已连接') + ' / ' + esc(s.repo) + '</b></div>' +
-      '<div class="tiny muted" style="margin:4px 0 10px">' + txt + '</div>' +
-      '<div class="btn-row">' +
+      '<div class="tiny muted" style="margin:4px 0 2px">' + txt + '</div>' + infoLine +
+      '<div class="btn-row" style="margin-top:10px">' +
       '<button class="btn ghost sm" data-action="sync-now">' + ic('refresh', 'sm') + '立即同步</button>' +
+      '<button class="btn ghost sm" data-action="sync-clear-mk">' + ic('trash', 'sm') + '清空本机错题</button>' +
       '<button class="btn ghost sm" data-action="sync-off" style="color:var(--coral)">关闭同步</button></div></div>';
   }
   function paintSync() {
@@ -521,8 +643,14 @@
   function addStars(n) { db.stars += n; save(); }
   function addMistake(obj) {
     const exist = db.mistakes.find(m => !m.mastered && m.subject === obj.subject && m.q === obj.q);
-    if (exist) { exist.mine = obj.mine; exist.date = today(); }
-    else db.mistakes.unshift(Object.assign({ id: uid(), date: today(), mastered: false, note: '' }, obj));
+    if (exist) { exist.mine = obj.mine; exist.date = today(); exist.ts = Date.now(); }
+    else {
+      const item = Object.assign({ id: uid(), date: today(), mastered: false, note: '' }, obj, { ts: Date.now() });
+      db.mistakes.unshift(item);
+      /* v47：删掉的题后来又做错了，要能重新收进来——清掉内容指纹，否则下次打开又被过滤掉 */
+      const k = mkKey(item);
+      if (k && db.mkGone) delete db.mkGone[k];
+    }
     save();
   }
 
@@ -2608,7 +2736,26 @@
       if (SYNC.busy) { toast('正在同步，稍等一下'); return; }
       syncNow('manual').then(st => {
         if (st === 'ok') toast('已同步 · ' + syncAgo(db.sync.lastAt));
-        else if (st === 'err') toast('同步失败：' + SYNC.err);
+        else if (st === 'err') toast('同步失败：' + syncErrText(SYNC.err));
+      });
+    },
+    /* v47：另一台已经清空、这台还留着旧错题时，一键对齐（不必一条条删） */
+    'sync-clear-mk'() {
+      const n = db.mistakes.length;
+      if (!n) { toast('这台设备上已经没有错题了'); return; }
+      openModal('<div class="modal">' + modalHead('清空本机的错题本？') +
+        '<div class="tiny muted" style="line-height:1.9">这台设备上的 <b>' + n + ' 道错题</b>会全部删掉，并同步到另一台设备（那边也会一起清空）。<br>' +
+        '打卡、星星、作业和设置都不受影响。删除后无法撤销。</div>' +
+        '<div class="modal-foot"><button class="btn ghost" data-action="close-modal">取消</button>' +
+        '<button class="btn coral" data-action="sync-clear-mk-confirm">确认清空</button></div></div>');
+    },
+    'sync-clear-mk-confirm'() {
+      const n = db.mistakes.length;
+      db.mistakes.forEach(m => buryMistake(m));
+      db.mistakes = [];
+      save(); closeModal(); render();
+      syncNow('manual').then(st => {
+        toast(st === 'ok' ? '已清空 ' + n + ' 道错题并同步' : '已清空 ' + n + ' 道错题（同步稍后自动重试）');
       });
     },
     'sync-off'() {
@@ -2750,7 +2897,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v46 · 错题删除修复</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v47 · 同步可见</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -2964,7 +3111,7 @@
       db.counters = Object.assign({ dictation: 0, math: 0, oral: 0 }, p.counters || {});
       // v46：备份里的删除名单也一起恢复；导入是显式覆盖，以备份内容为准
       db.mkDeleted = (p.mkDeleted && typeof p.mkDeleted === 'object' && !Array.isArray(p.mkDeleted)) ? p.mkDeleted : {};
-      if (Array.isArray(db.mistakes)) db.mistakes = db.mistakes.filter(m => m && !db.mkDeleted[m.id]);
+      dedupeMistakes();
       db.sync = Object.assign(defaultDB().sync, p.sync || {});
       db.sync.device = db.sync.device || uid();
       if (!db.sync.token && keep.token) { db.sync.token = keep.token; if (!db.sync.owner) db.sync.owner = keep.owner; }
@@ -3489,14 +3636,20 @@
     },
     'mk-del'(el) {
       const id = el.dataset.id;
-      buryMistake(id);
-      db.mistakes = db.mistakes.filter(x => x.id !== id);
+      const cur = db.mistakes.find(x => x.id === id);
+      /* v47：同一道题可能因为两台设备各记了一次而存成两条（内容一样、id 不同），
+         只删一条，另一条还在，看起来就像「删了没反应」。这里把同内容的副本一起删。 */
+      const same = !cur ? db.mistakes.filter(x => x.id === id) : db.mistakes.filter(x =>
+        x.id === id || (x.subject === cur.subject && String(x.q || '').trim() === String(cur.q || '').trim()));
+      const dead = new Set(same.map(x => x.id));
+      same.forEach(x => buryMistake(x));
+      db.mistakes = db.mistakes.filter(x => !dead.has(x.id));
       save(); render();
     },
     'mk-clear'() {
       const gone = db.mistakes.filter(m => m.mastered);
       if (!gone.length) { toast('还没有标记为已掌握的题目'); return; }
-      gone.forEach(m => buryMistake(m.id));
+      gone.forEach(m => buryMistake(m));
       db.mistakes = db.mistakes.filter(m => !m.mastered);
       save(); render(); toast('已清理掌握的题目');
     },

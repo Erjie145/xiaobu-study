@@ -8,14 +8,14 @@
 <meta http-equiv="Expires" content="0">
 <meta name="theme-color" content="#f6f7fb">
 <meta name="description" content="五年级学习陪伴：每日作业打卡、英语听写、作业拍照检查（数学/语文/英语）与错题讲解">
-<link rel="manifest" href="manifest.webmanifest?v=46">
-<link rel="icon" href="icons/favicon.png?v=46" sizes="64x64">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=46">
+<link rel="manifest" href="manifest.webmanifest?v=47">
+<link rel="icon" href="icons/favicon.png?v=47" sizes="64x64">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=47">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="小步陪伴">
 <title>小步陪伴 · 每日学习</title>
-<link rel="stylesheet" href="styles.css?v=46">
+<link rel="stylesheet" href="styles.css?v=47">
 <script>
 /* 排障：任何脚本错误直接显示在屏幕顶部，方便远程定位设备差异问题 */
 (function () {
@@ -81,7 +81,7 @@
 <div class="app">
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark"><img src="icons/pipi-sm.png?v=46" alt="天禄"></div>
+      <div class="brand-mark"><img src="icons/pipi-sm.png?v=47" alt="天禄"></div>
       <div class="brand-text"><strong>小步陪伴</strong><span>天禄陪你，每天一点点</span></div>
     </div>
 
@@ -95,7 +95,7 @@
       <button class="side-link" data-action="open-settings">
         <svg class="icon"><use href="#i-settings"></use></svg><span>设置</span>
       </button>
-      <div style="text-align:center;font-size:11px;color:#a7adbf;padding:10px 4px 2px;letter-spacing:.4px">v46 · 错题删除修复</div>
+      <div style="text-align:center;font-size:11px;color:#a7adbf;padding:10px 4px 2px;letter-spacing:.4px">v47 · 同步可见</div>
     </div>
   </aside>
 
@@ -109,8 +109,8 @@
 <div id="modalRoot"></div>
 <div id="toast" class="toast"></div>
 
-<script src="data.js?v=46"></script>
-<script src="app.js?v=46"></script>
+<script src="data.js?v=47"></script>
+<script src="app.js?v=47"></script>
 <script>
 (function () {
   /* 手动强制更新：注销全部 SW + 清空全部缓存 + 重载。
@@ -146,7 +146,7 @@
         } catch (e) { return; }
         location.reload();
       });
-      navigator.serviceWorker.register('sw.js?v=46').then(function (reg) {
+      navigator.serviceWorker.register('sw.js?v=47').then(function (reg) {
         // 每次打开都主动向服务器核对一次 SW，避免 iOS 长期不检查更新
         try { reg.update(); } catch (e) {}
       }).catch(function () {});
