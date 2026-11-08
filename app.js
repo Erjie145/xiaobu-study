@@ -34,7 +34,7 @@
       avatar: '', pic: '',            /* v26：自定义宠物图（压缩后的 dataURL） */
       earned: { checkin: false, oral: 0, dict: 0, master: 0 }, log: []
     },
-    /* v36：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
+    /* v37：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
     sync: {
       token: '', owner: '', repo: 'xiaobu-sync', on: false,
       lastAt: 0, sha: '', updatedAt: 0, device: '', err: ''
@@ -64,11 +64,11 @@
     // v26 首次升级：自定义宠物图，老数据补空字符串（表示用默认天禄）
     db.pet.avatar = typeof db.pet.avatar === 'string' ? db.pet.avatar : '';
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
-    // v36：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
+    // v37：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
     db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
     if (!db.sync.device) db.sync.device = uid();
   } catch (e) { db = defaultDB(); }
-  /* v36：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
+  /* v37：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
   const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0 };
   function scheduleSync(ms) {
     if (!db || !db.sync || !db.sync.on || !db.sync.token) return;
@@ -83,7 +83,7 @@
     return true;
   };
 
-  /* ================= v36 · 家庭同步 =================
+  /* ================= v37 · 家庭同步 =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -2199,7 +2199,7 @@
       toast(rate >= 1 ? '太棒了！全部完成，获得 ' + stars + ' 颗星星' : '打卡成功，完成 ' + Math.round(rate * 100) + '%，获得 ' + stars + ' 颗星星');
     },
 
-    /* ---- v36 家庭同步 ---- */
+    /* ---- v37 家庭同步 ---- */
     'sync-start'() {
       openModal('<div class="modal wide">' + modalHead('开启家庭同步') +
         '<div class="tiny muted" style="line-height:2">' +
@@ -2208,13 +2208,43 @@
         '<b>3.</b> 拉到底点 <b>Generate token</b>，复制那串 <b>ghp_</b> 开头的字符。<br>' +
         '<b>4.</b> 粘到下面，点「连接」。' +
         '</div>' +
-        '<div class="btn-row" style="margin:14px 0 10px"><a class="btn sm" href="https://github.com/settings/tokens/new?scopes=repo&description=xiaobu-study-sync" target="_blank" rel="noopener">' + ic('arrow', 'sm') + '去 GitHub 创建令牌</a></div>' +
+        '<div class="btn-row" style="margin:14px 0 10px"><button class="btn sm" data-action="sync-open-github">' + ic('arrow', 'sm') + '去 GitHub 创建令牌</button>' +
+        '<button class="btn ghost sm" data-action="copy-sync-url">' + ic('download', 'sm') + '复制创建链接</button></div>' +
+        '<div class="tiny muted" style="margin-bottom:4px">点按钮没反应？主屏幕应用有时拦掉新窗口——点「复制创建链接」，到 <b>Safari</b> 里粘贴打开就行。用哪台设备创建都行，令牌是跟着账号走的。</div>' +
         '<div class="field"><label>粘贴令牌（只保存在这台设备）</label>' +
         '<input class="input" id="syncToken" placeholder="ghp_..." autocomplete="off" autocapitalize="off" spellcheck="false"></div>' +
         '<div class="tiny muted" style="margin-top:8px;line-height:1.8">令牌相当于这个账号的钥匙，<b>只存在本机浏览器里</b>，不会上传到别处，随时能在 GitHub 设置里撤销。' +
         '另一台设备用<b>同一个账号</b>重复一次这一步，两台就开始自动同步了。</div>' +
         '<div class="modal-foot" style="margin-top:14px"><button class="btn ghost" data-action="close-modal">取消</button>' +
         '<button class="btn" data-action="sync-save">连接</button></div></div>');
+    },
+    'sync-open-github'() {
+      const url = 'https://github.com/settings/tokens/new?scopes=repo&description=xiaobu-study-sync';
+      let ok = false;
+      try {
+        const w = window.open(url, '_blank');
+        ok = !!w && !w.closed;
+        if (w) { try { w.opener = null; } catch (e) {} }
+      } catch (e) { ok = false; }
+      if (ok) return;
+      /* iOS 主屏幕应用经常拦掉新窗口：给出可复制的链接 + 应用内打开两条退路 */
+      const shown = 'https://github.com/settings/tokens/new?scopes=repo&description=xiaobu-study-sync';
+      openModal('<div class="modal">' + modalHead('用 Safari 打开这个链接') +
+        '<div class="tiny muted" style="line-height:1.9">在哪台设备上创建都行（令牌跟着账号走）。复制下面的地址，到 <b>Safari</b> 里粘贴打开并登录 GitHub：</div>' +
+        '<textarea class="input" rows="3" readonly onclick="this.focus();this.select()" style="font-size:12px">' + esc(shown) + '</textarea>' +
+        '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="copy-sync-url">' + ic('download', 'sm') + '复制链接</button>' +
+        '<button class="btn sm" data-action="sync-goto-github">在本应用中打开</button></div>' +
+        '<div class="tiny muted" style="margin-top:8px">「在本应用中打开」会离开小步陪伴一会儿，创建完令牌后从主屏幕图标重新进来即可，记录不会丢。</div>' +
+        '<div class="modal-foot" style="margin-top:14px"><button class="btn ghost" data-action="close-modal">关闭</button></div></div>');
+    },
+    'copy-sync-url'() {
+      const t = 'https://github.com/settings/tokens/new?scopes=repo&description=xiaobu-study-sync';
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(t).then(() => toast('链接已复制，去 Safari 里粘贴打开'), () => toast('长按方框里的地址手动复制'));
+      } else toast('长按方框里的地址手动复制');
+    },
+    'sync-goto-github'() {
+      location.href = 'https://github.com/settings/tokens/new?scopes=repo&description=xiaobu-study-sync';
     },
     async 'sync-save'() {
       const el = document.getElementById('syncToken');
@@ -2388,7 +2418,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v36 · 家庭同步</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v37 · 家庭同步</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -3230,7 +3260,7 @@
 
   /* ---------------- 启动 ---------------- */
   render();
-  /* v36：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
+  /* v37：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
   if (db.sync && db.sync.on && db.sync.token) {
     setTimeout(() => { syncNow('boot'); }, 2500);
     setInterval(() => {
