@@ -29,9 +29,12 @@
     tasks: {}, checkins: {}, stars: 0, starUsed: 0, bestStreak: 0,
     mistakes: [], customWords: [], counters: { dictation: 0, math: 0, oral: 0 },
     oral: { best: {} },
-    /* 宠物喂养：积分、零食柜、喂食次数、每日积分明细 */
+    /* 宠物喂养：积分、零食柜、喂食次数、每日积分明细
+       pointsIn / pointsOut 是累计获得与累计花掉，只增不减。
+       同步时用「累计获得 - 累计花掉」算余额，否则两台设备一合并，
+       兑换掉的积分和星星会被另一边的旧余额「取大值」顶回来。 */
     pet: {
-      points: 0, food: {}, fed: 0, fondness: 0, day: '',
+      points: 0, pointsIn: 0, pointsOut: 0, food: {}, fed: 0, fondness: 0, day: '',
       avatar: '', pic: '',            /* v26：自定义宠物图（压缩后的 dataURL） */
       earned: { checkin: false, oral: 0, dict: 0, master: 0 }, log: []
     },
@@ -62,6 +65,12 @@
     db.pet.food = db.pet.food || {};
     db.pet.log = db.pet.log || [];
     db.pet.earned = Object.assign({ checkin: false, oral: 0, dict: 0, master: 0 }, db.pet.earned || {});
+    // v45：累计获得 / 累计花掉。老数据只有净余额，就把余额当成「累计获得」，
+    // 之后每次加分或花分都同时累加，跨设备合并时就不会把兑换结果顶回去
+    if (db.pet.pointsIn == null || db.pet.pointsOut == null) {
+      db.pet.pointsOut = Math.max(0, db.pet.pointsOut | 0);
+      db.pet.pointsIn = Math.max(0, (db.pet.points | 0) + db.pet.pointsOut);
+    }
     // v26 首次升级：自定义宠物图，老数据补空字符串（表示用默认天禄）
     db.pet.avatar = typeof db.pet.avatar === 'string' ? db.pet.avatar : '';
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
@@ -84,7 +93,7 @@
     return true;
   };
 
-  /* ================= v44 · 弹窗修正 =================
+  /* ================= v45 · 兑换修复 =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -255,8 +264,15 @@
       if ((R.counters[k] | 0) > (cs[k] | 0)) { cs[k] = R.counters[k]; mark(); }
     }
     out.counters = cs;
-    if ((R.stars | 0) > (out.stars | 0)) { out.stars = R.stars; mark(); }
-    if ((R.starUsed | 0) > (out.starUsed | 0)) { out.starUsed = R.starUsed; mark(); }
+    /* 星星会被兑换掉，直接「取大」的旧逻辑会让另一边留着的余额把星星顶回来。
+       累计星星 = 当前星星 + 已兑换，只增不减；余额 = 累计 - 已兑换。 */
+    const totStars = Math.max((out.stars | 0) + (out.starUsed | 0), (R.stars | 0) + (R.starUsed | 0));
+    const usedStars = Math.max(out.starUsed | 0, R.starUsed | 0);
+    if (totStars !== (out.stars | 0) + (out.starUsed | 0) || usedStars !== (out.starUsed | 0)) {
+      out.starUsed = usedStars;
+      out.stars = Math.max(0, totStars - usedStars);
+      mark();
+    }
     if ((R.bestStreak | 0) > (out.bestStreak | 0)) { out.bestStreak = R.bestStreak; mark(); }
 
     // 口算最好成绩
@@ -266,10 +282,19 @@
       if ((R.oral.best[k] | 0) > (out.oral.best[k] | 0)) { out.oral.best[k] = R.oral.best[k]; mark(); }
     }
 
-    // 宠物：数值取大，零食按项取大，自定义图片保留有图的一边
+    // 宠物：积分会被兑换零食花掉，同样用「累计获得 - 累计花掉」算余额
     out.pet = Object.assign({}, out.pet || {});
     const RP = R.pet || {};
-    ['points', 'fed', 'fondness'].forEach(k => {
+    const petIn = p => (p && p.pointsIn != null) ? (p.pointsIn | 0) : Math.max(0, ((p && p.points) | 0) + ((p && p.pointsOut) | 0));
+    const petOut = p => (p && p.pointsOut) | 0;
+    const inMax = Math.max(petIn(out.pet), petIn(RP));
+    const outMax = Math.max(petOut(out.pet), petOut(RP));
+    const pointsBal = Math.max(0, inMax - outMax);
+    if (inMax !== (out.pet.pointsIn | 0) || outMax !== (out.pet.pointsOut | 0) || pointsBal !== (out.pet.points | 0)) mark();
+    out.pet.pointsIn = inMax;
+    out.pet.pointsOut = outMax;
+    out.pet.points = pointsBal;
+    ['fed', 'fondness'].forEach(k => {
       if ((RP[k] | 0) > (out.pet[k] | 0)) { out.pet[k] = RP[k]; mark(); }
     });
     out.pet.food = Object.assign({}, out.pet.food || {});
@@ -2161,6 +2186,7 @@
     db.starUsed = (db.starUsed || 0) + n;
     petDay();
     db.pet.points += gain;
+    db.pet.pointsIn = (db.pet.pointsIn || 0) + gain;
     db.pet.log.unshift({ t: Date.now(), n: gain, r: '用 ' + n + ' 颗星星兑换' });
     db.pet.log = db.pet.log.slice(0, 40);
     save(); Sound.ok();
@@ -2182,6 +2208,7 @@
     if (!n || n <= 0) return;
     petDay();
     db.pet.points += n;
+    db.pet.pointsIn = (db.pet.pointsIn || 0) + n;
     db.pet.log.unshift({ t: Date.now(), n: n, r: reason });
     db.pet.log = db.pet.log.slice(0, 40);
     save();
@@ -2690,7 +2717,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v44 · 弹窗修正</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v45 · 兑换修复</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -2896,6 +2923,11 @@
       db.pet = Object.assign(defaultDB().pet, p.pet || {});
       db.pet.food = db.pet.food || {};
       db.pet.earned = Object.assign({ checkin: false, oral: 0, dict: 0, master: 0 }, db.pet.earned || {});
+      /* 旧备份没有累计字段时，把当时的余额当成累计获得，免得下次同步被算成负数 */
+      if (!p.pet || p.pet.pointsIn == null || p.pet.pointsOut == null) {
+        db.pet.pointsOut = Math.max(0, (p.pet && p.pet.pointsOut) | 0);
+        db.pet.pointsIn = Math.max(0, (db.pet.points | 0) + db.pet.pointsOut);
+      }
       db.counters = Object.assign({ dictation: 0, math: 0, oral: 0 }, p.counters || {});
       db.sync = Object.assign(defaultDB().sync, p.sync || {});
       db.sync.device = db.sync.device || uid();
@@ -3284,6 +3316,7 @@
         return;
       }
       db.pet.points -= item.price;
+      db.pet.pointsOut = (db.pet.pointsOut || 0) + item.price;
       db.pet.food[id] = (db.pet.food[id] || 0) + 1;
       save(); Sound.ok(); render();
       toast('换到了 ' + item.name + '，拖给天禄吃吧');
