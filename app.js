@@ -28,6 +28,9 @@
     },
     tasks: {}, checkins: {}, stars: 0, starUsed: 0, bestStreak: 0,
     mistakes: [], customWords: [], counters: { dictation: 0, math: 0, oral: 0 },
+    /* v46：错题删除名单（id → 删除时间）。删掉的错题在另一台设备上还有旧副本，
+       同步时「取并集」会把它复活，所以删除要留下记录一起同步。 */
+    mkDeleted: {},
     oral: { best: {} },
     /* 宠物喂养：积分、零食柜、喂食次数、每日积分明细
        pointsIn / pointsOut 是累计获得与累计花掉，只增不减。
@@ -74,6 +77,9 @@
     // v26 首次升级：自定义宠物图，老数据补空字符串（表示用默认天禄）
     db.pet.avatar = typeof db.pet.avatar === 'string' ? db.pet.avatar : '';
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
+    // v46：老数据补上错题删除名单，并把名单里残留的错题清掉
+    db.mkDeleted = (db.mkDeleted && typeof db.mkDeleted === 'object' && !Array.isArray(db.mkDeleted)) ? db.mkDeleted : {};
+    if (Array.isArray(db.mistakes)) db.mistakes = db.mistakes.filter(m => m && !db.mkDeleted[m.id]);
     // v41：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
     db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
     if (!db.sync.device) db.sync.device = uid();
@@ -93,7 +99,7 @@
     return true;
   };
 
-  /* ================= v45 · 兑换修复 =================
+  /* ================= 家庭同步（v41 起） =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -210,6 +216,21 @@
     return { sha: r.data && r.data.content ? r.data.content.sha : sha };
   }
 
+  /* v46：删错题时在本地记一个「墓碑」。
+     本来只是从数组里过滤掉，但另一台设备还留着同一道题，同步一合并又回来了。
+     墓碑随数据一起同步，合并时按名单剔除，删掉的就真的没了。
+     只增不减，超过 600 条时丢掉最早的（正常一年也删不到这么多）。 */
+  function buryMistake(id) {
+    if (!id) return;
+    db.mkDeleted = db.mkDeleted || {};
+    db.mkDeleted[id] = Date.now();
+    const keys = Object.keys(db.mkDeleted);
+    if (keys.length > 600) {
+      keys.sort((a, b) => (db.mkDeleted[a] | 0) - (db.mkDeleted[b] | 0));
+      keys.slice(0, keys.length - 600).forEach(k => { delete db.mkDeleted[k]; });
+    }
+  }
+
   /* 合并：记录类按条目取并集，标量类取较大值，设置类以较新的一边为准 */
   function mergeAll(L, R) {
     const out = JSON.parse(JSON.stringify(L));
@@ -241,13 +262,25 @@
     }
     out.tasks = tk;
 
-    // 错题本：按 id 并集，讲懂过就算讲懂
-    const mkMap = new Map((out.mistakes || []).map(m => [m.id, m]));
+    // 错题本：先把两边的「已删除」名单合起来，按 id 并集，讲懂过就算讲懂
+    const dead = Object.assign({}, out.mkDeleted || {});
+    for (const id in (R.mkDeleted || {})) {
+      if ((R.mkDeleted[id] | 0) > (dead[id] | 0)) { dead[id] = R.mkDeleted[id]; mark(); }
+    }
+    out.mkDeleted = dead;
+    const mkLen = (out.mistakes || []).length;
+    const mkMap = new Map();
+    for (const m of (out.mistakes || [])) {
+      if (!m || dead[m.id]) { mark(); continue; }   // 本地还留着的已删错题：同步时顺手清掉
+      mkMap.set(m.id, m);
+    }
     for (const m of (R.mistakes || [])) {
+      if (!m || dead[m.id]) continue;
       const e = mkMap.get(m.id);
       if (!e) { mkMap.set(m.id, m); mark(); }
       else if (m.mastered && !e.mastered) { mkMap.set(m.id, Object.assign({}, e, { mastered: true })); mark(); }
     }
+    if (mkMap.size !== mkLen) mark();
     out.mistakes = Array.from(mkMap.values());
 
     // 自定义词库：按单词去重并集
@@ -2717,7 +2750,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v45 · 兑换修复</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v46 · 错题删除修复</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -2929,6 +2962,9 @@
         db.pet.pointsIn = Math.max(0, (db.pet.points | 0) + db.pet.pointsOut);
       }
       db.counters = Object.assign({ dictation: 0, math: 0, oral: 0 }, p.counters || {});
+      // v46：备份里的删除名单也一起恢复；导入是显式覆盖，以备份内容为准
+      db.mkDeleted = (p.mkDeleted && typeof p.mkDeleted === 'object' && !Array.isArray(p.mkDeleted)) ? p.mkDeleted : {};
+      if (Array.isArray(db.mistakes)) db.mistakes = db.mistakes.filter(m => m && !db.mkDeleted[m.id]);
       db.sync = Object.assign(defaultDB().sync, p.sync || {});
       db.sync.device = db.sync.device || uid();
       if (!db.sync.token && keep.token) { db.sync.token = keep.token; if (!db.sync.owner) db.sync.owner = keep.owner; }
@@ -3451,8 +3487,19 @@
       if (m.mastered) Sound.ok(); else Sound.click();
       toast(m.mastered ? '标记为已掌握，真棒' : '已放回待复习');
     },
-    'mk-del'(el) { db.mistakes = db.mistakes.filter(x => x.id !== el.dataset.id); save(); render(); },
-    'mk-clear'() { db.mistakes = db.mistakes.filter(m => !m.mastered); save(); render(); toast('已清理掌握的题目'); },
+    'mk-del'(el) {
+      const id = el.dataset.id;
+      buryMistake(id);
+      db.mistakes = db.mistakes.filter(x => x.id !== id);
+      save(); render();
+    },
+    'mk-clear'() {
+      const gone = db.mistakes.filter(m => m.mastered);
+      if (!gone.length) { toast('还没有标记为已掌握的题目'); return; }
+      gone.forEach(m => buryMistake(m.id));
+      db.mistakes = db.mistakes.filter(m => !m.mastered);
+      save(); render(); toast('已清理掌握的题目');
+    },
     'mk-speak'(el) {
       const m = db.mistakes.find(x => x.id === el.dataset.id) || { correct: el.dataset.w || '', subject: '英语' };
       if (m.subject === '语文') speakChinese(String(m.correct || ''));
