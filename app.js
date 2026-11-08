@@ -452,9 +452,15 @@
       if (add.length) { out.pet.log = (out.pet.log || []).concat(add).slice(-200); mark(); }
     }
 
-    // 设置：首次在这台设备上连接时，整体以已有设备为准；之后按修改时间取新的
+    // 设置：首次在这台设备上连接时，整体以已有设备为准；之后按修改时间取新的。
+    // 例外：音效开关与音量是「这台设备的偏好」，不跟着账号走 ——
+    // 否则另一台设备的旧设置会在同步时把本机刚调好的音量盖回去（v49 修的就是这个）。
     if ((newer || !(L.sync && L.sync.lastAt)) && R.settings && stable(R.settings) !== stable(out.settings)) {
-      out.settings = Object.assign({}, out.settings, R.settings); mark();
+      const mergedSet = Object.assign({}, out.settings, R.settings, {
+        sound: out.settings.sound === undefined ? true : out.settings.sound,
+        soundVolume: out.settings.soundVolume === undefined ? 0.5 : out.settings.soundVolume
+      });
+      if (stable(mergedSet) !== stable(out.settings)) { out.settings = mergedSet; mark(); }
     }
 
     out.sync = Object.assign({}, L.sync);
@@ -533,6 +539,9 @@
         SYNC.lock = false;
         persist();
         paintSync();
+        /* v49：合并后设置可能变了（例如另一台改了音效），让音效立刻跟着走，
+           不然要等下次重开 App 才生效。 */
+        try { Sound.config({ on: db.settings.sound !== false, vol: db.settings.soundVolume == null ? 0.5 : db.settings.soundVolume }); } catch (e) { }
         if (changed) { try { render(); } catch (e) {} }
       }
       return SYNC.state;
@@ -1118,7 +1127,11 @@
     document.body.appendChild(box); setTimeout(() => box.remove(), 3200);
   }
   function openModal(html) { $('#modalRoot').innerHTML = '<div class="modal-mask" data-action="mask">' + html + '</div>'; }
-  function closeModal() { $('#modalRoot').innerHTML = ''; S.draft = null; S.modal = null; }
+  function closeModal() {
+    $('#modalRoot').innerHTML = ''; S.draft = null; S.modal = null;
+    /* v49：在设置里试听过的音量是临时的，关掉弹窗（含点「取消」）就恢复成已保存的设置 */
+    Sound.config({ on: db.settings.sound !== false, vol: db.settings.soundVolume == null ? 0.5 : db.settings.soundVolume });
+  }
   function modalHead(title) { return '<div class="modal-h"><h3>' + esc(title) + '</h3><button class="x" data-action="close-modal">' + ic('x') + '</button></div>'; }
   function empty(text, icon) { return '<div class="empty">' + ic(icon || 'book') + '<div>' + esc(text) + '</div></div>'; }
   const isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
@@ -1143,7 +1156,7 @@
     return {
       config(o) { Object.assign(cfg, o); },
       wake() { AudioSys.wake(); },
-      click() { tone(620, 0, 0.05, 'sine', 0.16, 880); },
+      click() { tone(760, 0, 0.045, 'sine', 0.34, 1040); tone(1520, 0, 0.028, 'sine', 0.10); },
       tick() { tone(880, 0, 0.06, 'sine', 0.18); tone(1320, 0.055, 0.09, 'sine', 0.12); },
       ok() { tone(784, 0.06, 0.09, 'sine', 0.20); tone(1175, 0.15, 0.13, 'sine', 0.16); },
       no() { tone(330, 0.06, 0.17, 'triangle', 0.14, 220); },
@@ -2334,32 +2347,33 @@
      v21 · 天禄小窝：积分 → 商城 → 拖拽喂养
      规则：当天完成作业打卡、且错题全部弄懂后才解锁
      ========================================================== */
-  /* v48：每种食物能顶多久（饱食度点数）。100 点 = 48 小时，
-     所以一天要喂 2～3 次，零食才不会断顿。 */
+  /* v49：每种食物能顶多久（饱食度点数）。100 点 = 24 小时，
+     水果大概顶 6～7 小时、小蛋糕顶 11 小时，一天喂两三次就不会断顿。
+     对 1 点 ≈ 14.4 分钟。 */
   const SHOP = [
-    { id: 'apple',  name: '红苹果', emoji: '🍎', price: 6,  energy: 20, yum: '咔嚓咔嚓，好脆好甜' },
-    { id: 'banana', name: '香蕉',   emoji: '🍌', price: 5,  energy: 22, yum: '软软糯糯，最喜欢啦' },
-    { id: 'strawberry', name: '草莓', emoji: '🍓', price: 8, energy: 18, yum: '酸酸甜甜，一口一个' },
-    { id: 'grape',  name: '葡萄',   emoji: '🍇', price: 7,  energy: 18, yum: '噗啾，汁水好多' },
-    { id: 'cookie', name: '小饼干', emoji: '🍪', price: 4,  energy: 14, yum: '咔滋咔滋，好香呀' },
-    { id: 'cake',   name: '小蛋糕', emoji: '🍰', price: 10, energy: 34, yum: '唔～奶油好绵' },
-    { id: 'candy',  name: '水果糖', emoji: '🍬', price: 3,  energy: 10, yum: '吧唧吧唧，甜甜的' },
-    { id: 'carrot', name: '胡萝卜', emoji: '🥕', price: 3,  energy: 16, yum: '嘎嘣脆，眼睛会变亮哦' },
-    { id: 'milk',   name: '牛奶',   emoji: '🥛', price: 4,  energy: 16, yum: '咕嘟咕嘟，好舒服' },
-    { id: 'juice',  name: '果汁',   emoji: '🧃', price: 5,  energy: 14, yum: '咕噜～冰凉凉的' },
-    { id: 'orb',    name: '彩色宝珠', emoji: '🔮', price: 14, energy: 55, rare: true,
+    { id: 'apple',  name: '红苹果', emoji: '🍎', price: 6,  energy: 28, yum: '咔嚓咔嚓，好脆好甜' },
+    { id: 'banana', name: '香蕉',   emoji: '🍌', price: 5,  energy: 30, yum: '软软糯糯，最喜欢啦' },
+    { id: 'strawberry', name: '草莓', emoji: '🍓', price: 8, energy: 26, yum: '酸酸甜甜，一口一个' },
+    { id: 'grape',  name: '葡萄',   emoji: '🍇', price: 7,  energy: 26, yum: '噗啾，汁水好多' },
+    { id: 'cookie', name: '小饼干', emoji: '🍪', price: 4,  energy: 18, yum: '咔滋咔滋，好香呀' },
+    { id: 'cake',   name: '小蛋糕', emoji: '🍰', price: 10, energy: 45, yum: '唔～奶油好绵' },
+    { id: 'candy',  name: '水果糖', emoji: '🍬', price: 3,  energy: 14, yum: '吧唧吧唧，甜甜的' },
+    { id: 'carrot', name: '胡萝卜', emoji: '🥕', price: 3,  energy: 20, yum: '嘎嘣脆，眼睛会变亮哦' },
+    { id: 'milk',   name: '牛奶',   emoji: '🥛', price: 4,  energy: 22, yum: '咕嘟咕嘟，好舒服' },
+    { id: 'juice',  name: '果汁',   emoji: '🧃', price: 5,  energy: 18, yum: '咕噜～冰凉凉的' },
+    { id: 'orb',    name: '彩色宝珠', emoji: '🔮', price: 14, energy: 70, rare: true,
       yum: '咕噜咕噜～肚子里在放小烟花！' }
   ];
   const SHOP_BY = {};
   SHOP.forEach(x => { SHOP_BY[x.id] = x; });
 
-  /* ================= v48 · 饥饿值 =================
-   * 天禄有一个 0～100 的饱食度：满格 100，48 小时匀速掉到 0（每小时约 2.08），
+  /* ================= v48 · 饥饿值（v49 改为 24 小时） =================
+   * 天禄有一个 0～100 的饱食度：满格 100，24 小时匀速掉到 0（每小时约 4.17），
    * 也就是一天要喂两三次才不会饿。
    * 不存「当前值」而存「每一次喂食」，打开时按时间推一遍：
    * 这样两台设备各自算出来的数字一定一样，同步时把喂食记录合起来就行。
    */
-  const HUNGER_HOURS = 48;
+  const HUNGER_HOURS = 24;
   const HUNGER_PER_MS = 100 / (HUNGER_HOURS * 3600000);
   const FEED_KEEP_MS = 72 * 3600000;      // 只保留最近 3 天的喂食记录
 
@@ -2408,7 +2422,7 @@
       '<div class="hg-main"><b>' + st.text + '</b><span>' + satietyLeftText(v) + '</span></div>' +
       '<span class="hg-num">' + Math.round(v) + '<i>/100</i></span></div>' +
       '<div class="hg-bar"><i style="width:' + Math.max(2, v) + '%;background:' + st.color + '"></i></div>' +
-      (compact ? '' : '<div class="hg-tip">饱食度 48 小时会慢慢掉光，每天来喂天禄两三次刚好～</div>') +
+      (compact ? '' : '<div class="hg-tip">饱食度 24 小时会慢慢掉光，每天来喂天禄两三次刚好～</div>') +
       '</div>';
   }
 
@@ -2549,13 +2563,14 @@
       '<div class="hg-note">天禄饿得等不及了，今天先喂它，作业打卡别忘了补上哦～</div>' : '') + starJarHtml() +
       '<div class="yard">' +
       '<div class="yard-pet">' +
-      '<div class="mouth-zone" id="mouthZone">' +
+      '<div class="mouth-zone" id="mouthZone" data-action="pet-tap" role="button" aria-label="点一点天禄，听它说话">' +
       '<img class="yard-img' + (petPic() ? ' custom' : '') + '" id="yardPet" src="' + esc(petPic()) + '" alt="天禄" draggable="false">' +
       '<div class="mouth-ring"></div>' +
       '</div>' +
       '<div class="yard-bubble" id="yardBubble">' + (petFeedMsg ?
         '<b>吧唧吧唧～</b>' + esc(petFeedMsg) :
-        (satNow < 30 ? '饿得直哼哼…快喂我一口吧～' : '把右边的零食拖到我嘴边，或者点一下也行～')) + '</div>' +
+        petPatMsg ? '<b>天禄：</b>' + esc(petPatMsg) :
+        (satNow < 30 ? '饿得直哼哼…快喂我一口吧～' : '点一下我，或者把零食拖到我嘴边～')) + '</div>' +
       '</div>' +
       '<div class="shelf"><div class="shelf-title">我的零食柜</div>' +
       '<div class="shelf-list" id="shelfList">' + shelf + '</div>' +
@@ -2578,6 +2593,7 @@
   /* 把食物喂给天禄：扣库存、播咀嚼声、做动画 */
   let feeding = false;
   let petFeedMsg = '';          // 刚吃过的东西，重绘后气泡还能显示
+  let petPatMsg = '';           // 刚被摸过时说的话，重绘后气泡还能显示
   function feedPet(id) {
     const P = db.pet;
     if (!P.food[id] || !SHOP_BY[id]) return;
@@ -2682,6 +2698,51 @@
       const b = document.getElementById('yardBubble');
       if (b) b.innerHTML = '要拖到天禄嘴边才可以吃哦～';
     }
+  }
+
+  /* v49：点一下天禄 —— 说一句话、弹一下、冒爱心。
+     和喂食共用同一个气泡，所以优先顺序是：正在吃 > 刚摸过 > 默认提示。 */
+  let petPatLock = 0;
+  function petTap() {
+    if (dragFood || feeding) return false;
+    const now = Date.now();
+    if (now - petPatLock < 300) return false;      // 连点只算一次，别叠音
+    petPatLock = now;
+    const idx = Math.floor(Math.random() * PET_VOICES.length);
+    const item = PET_VOICES[idx];
+    const speechOn = db.settings.petVoice !== false;
+    petPatMsg = item.text;
+    clearTimeout(petTap._t);
+    petTap._t = setTimeout(() => { petPatMsg = ''; }, 7000);
+    const b = document.getElementById('yardBubble');
+    if (b) b.innerHTML = '<b>天禄：</b>' + esc(item.text);
+    const img = document.getElementById('yardPet');
+    if (img) {
+      img.classList.remove('patting');
+      void img.offsetWidth;                        // 强制重排，连点也能重新播动画
+      img.classList.add('patting');
+      setTimeout(() => { try { img.classList.remove('patting'); } catch (e) { } }, 720);
+    }
+    petHearts();
+    Sound.ok();
+    if (speechOn) speakPet(idx, item.say, null);
+    return true;
+  }
+  /* 冒几颗爱心：贴在嘴边，CSS 动画往上飘 */
+  function petHearts() {
+    const zone = document.getElementById('mouthZone');
+    if (!zone) return;
+    const box = document.createElement('div');
+    box.className = 'pet-hearts';
+    ['💗', '✨', '💕'].forEach((ch, i) => {
+      const s = document.createElement('i');
+      s.textContent = ch;
+      s.style.left = (30 + i * 19) + '%';
+      s.style.animationDelay = (i * 90) + 'ms';
+      box.appendChild(s);
+    });
+    zone.appendChild(box);
+    setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, 1600);
   }
 
   /* ---------------- 渲染入口 ---------------- */
@@ -2994,7 +3055,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v48 · 天禄会饿</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v49 · 点点天禄</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -3123,7 +3184,11 @@
       db.settings.canvas = CANVAS[d.canvas] !== undefined ? d.canvas : 'ipad11';
       db.settings.sound = !(d.sound === '0' || d.sound === 0 || d.sound === false);
       const sv = parseFloat(d.soundVolume);
-      db.settings.soundVolume = Math.min(1, Math.max(0, (isNaN(sv) ? 50 : sv) / 100));
+      let volv = Math.min(1, Math.max(0, (isNaN(sv) ? 50 : sv) / 100));
+      /* v49：音量拖到 0 时给一个最小音量。真要静音请用上面的「关闭」——
+         以前拖到 0 会和「关掉音效」看起来一样，孩子以为开关坏了。 */
+      if (volv === 0) volv = 0.35;
+      db.settings.soundVolume = volv;
       db.settings.voiceMode = d.voiceMode === 'tts' ? 'tts' : 'recorded';
       db.settings.voiceURI = String(d.voiceURI || '');
       db.settings.repeat = (d.repeat === '2' || d.repeat === 2 || d.repeat === true);
@@ -3605,6 +3670,8 @@
     },
 
     /* 辟邪宠物 */
+    /* v49：小窝里点一下天禄（首页那张卡片走下面的 pet-pat） */
+    'pet-tap'() { petTap(); },
     'pet-pat'() {
       const idx = Math.floor(Math.random() * PET_VOICES.length);
       const item = PET_VOICES[idx];
@@ -3792,7 +3859,7 @@
   };
 
   /* ---------------- 事件绑定 ---------------- */
-  const QUIET = { 'dict-submit': 1, 'dict-skip': 1, 'dict-start': 1, 'math-judge': 1, 'math-quiz-submit': 1, checkin: 1, 'toggle-task': 1, 'mk-master': 1, 'dict-key': 1, 'dict-kb-toggle': 1 };
+  const QUIET = { 'dict-submit': 1, 'dict-skip': 1, 'dict-start': 1, 'math-judge': 1, 'math-quiz-submit': 1, checkin: 1, 'toggle-task': 1, 'mk-master': 1, 'dict-key': 1, 'dict-kb-toggle': 1, 'pet-tap': 1, 'pet-pat': 1, 'buy-food': 1 };
   /* 天禄小窝：零食拖拽（鼠标 / 触摸通用） */
   document.addEventListener('pointerdown', e => {
     if (S.tab !== 'pet') return;
@@ -3879,7 +3946,16 @@
     if (m === 'dict.rate') { S.dict.rate = v; const lab = t.closest('.field').querySelector('label'); if (lab) lab.textContent = '朗读语速（' + v.toFixed(2) + ' 倍）· 听不清可以调慢'; return; }
     if (m.indexOf('draft.') === 0 && S.draft) {
       S.draft[m.slice(6)] = v;
-      if (m === 'draft.soundVolume') { const lab = document.getElementById('volLabel'); if (lab) lab.textContent = Math.round(v) + '%'; }
+      if (m === 'draft.soundVolume') {
+        const lab = document.getElementById('volLabel'); if (lab) lab.textContent = Math.round(v) + '%';
+        /* v49：以前把音量调大但「点击音效」还停在关闭，保存后就仍然没声音，
+           看着像「调大又被关掉」。现在只要音量不为 0，就自动把开关打开。 */
+        if (v > 0) {
+          S.draft.sound = '1';
+          const sel = document.querySelector('[data-model="draft.sound"]');
+          if (sel && sel.value !== '1') sel.value = '1';
+        }
+      }
       return;
     }
   });
@@ -3891,7 +3967,23 @@
     if (t.dataset.import !== undefined) { H['import-file'](t); return; }
     const m = t.dataset.model;
     if (m === 'dict.showZh') { S.dict.showZh = t.value === '1'; db.settings.showZh = S.dict.showZh; save(); }
-    if (m && m.indexOf('draft.') === 0 && S.draft) S.draft[m.slice(6)] = t.value;
+    if (m && m.indexOf('draft.') === 0 && S.draft) {
+      S.draft[m.slice(6)] = t.value;
+      /* v49：松手/选完就试听一下，调到多大心里有数 */
+      if (m === 'draft.soundVolume') {
+        const nv = Math.min(1, Math.max(0, (parseFloat(t.value) || 0) / 100));
+        Sound.config({ on: true, vol: nv || 0.5 });
+        if (nv > 0) Sound.click();
+      } else if (m === 'draft.sound') {
+        if (t.value === '0') { Sound.config({ on: false }); }
+        else {
+          const raw = S.draft.soundVolume;
+          const vol = raw == null ? 0.5 : (raw > 1 ? raw / 100 : raw);
+          Sound.config({ on: true, vol: vol || 0.5 });
+          Sound.click();
+        }
+      }
+    }
   });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') { closeModal(); return; }

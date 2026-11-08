@@ -887,3 +887,29 @@ html[data-orient="portrait"] .shop-grid{grid-template-columns:repeat(auto-fill,m
   .hg-face{font-size:23px}
   .hg-num{font-size:18px}
 }
+
+/* ---------- v49 小窝里点天禄：弹一下 + 冒爱心 ---------- */
+.mouth-zone{cursor:pointer}
+.yard-img.patting{animation:patBounce .7s cubic-bezier(.34,1.56,.64,1)}
+@keyframes patBounce{
+  0%{transform:scale(1) rotate(0)}
+  22%{transform:scale(.94,1.07) rotate(-2.5deg)}
+  46%{transform:scale(1.05,.95) rotate(2.5deg)}
+  68%{transform:scale(.98,1.02) rotate(-1deg)}
+  100%{transform:scale(1) rotate(0)}
+}
+.pet-hearts{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.pet-hearts i{
+  position:absolute;bottom:42%;font-style:normal;font-size:19px;line-height:1;
+  opacity:0;animation:heartUp 1.25s cubic-bezier(.22,.7,.4,1) forwards;
+  filter:drop-shadow(0 2px 4px rgba(240,120,150,.35));
+}
+@keyframes heartUp{
+  0%{opacity:0;transform:translateY(6px) scale(.5)}
+  18%{opacity:1;transform:translateY(-6px) scale(1.05)}
+  100%{opacity:0;transform:translateY(-64px) scale(1.1)}
+}
+@media(prefers-reduced-motion:reduce){
+  .yard-img.patting{animation:none}
+  .pet-hearts i{animation:none;opacity:0}
+}
