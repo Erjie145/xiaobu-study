@@ -2,8 +2,11 @@
  * v13：所有静态资源带版本号，强制绕过 iPad 上残留的旧 HTTP / SW 缓存。
  * 以后升级：把 CACHE 与 V 一起 +1，并同步 index.html / manifest 里的 ?v= 参数。
  */
-const CACHE = 'xiaobu-v42';
-const V = '?v=42';
+const CACHE = 'xiaobu-v43';
+const V = '?v=43';
+/* 音频单独一个缓存：改代码升版本时不会把几万个发音文件一起清掉重下。
+   音频内容有改动时，把 AUDIO 的名字和 app.js 里的语音包 ?v= 一起 +1。 */
+const AUDIO = 'xiaobu-audio-v42';
 const ASSETS = [
   './',
   'index.html',
@@ -25,15 +28,15 @@ const ASSETS = [
 
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE).then(async c => {
+    Promise.all([caches.open(CACHE), caches.open(AUDIO)]).then(async ([c, ac]) => {
       // 逐项缓存：单个资源失败不影响整个 SW 安装
       await Promise.all(ASSETS.map(u => c.add(u).catch(() => {})));
-      // 按清单预缓存全部课本单词的高清发音，断网也能听写
+      // 按清单预缓存全部课本单词的高清发音，断网也能听写（放进音频缓存，升级不重下）
       try {
         const r = await fetch('audio/manifest.json' + V, { cache: 'no-store' });
         if (r.ok) {
           const list = await r.json();
-          await Promise.all(list.map(u => c.add(u).catch(() => {})));
+          await Promise.all(list.map(u => ac.add(u).catch(() => {})));
         }
       } catch (err) { /* 清单读取失败不影响应用安装 */ }
       // 天禄的可爱语音包（三种声线 × 12 句），离线点它也能说话
@@ -41,7 +44,7 @@ self.addEventListener('install', e => {
         const pr = await fetch('audio/pet/manifest.json' + V, { cache: 'no-store' });
         if (pr.ok) {
           const pm = await pr.json();
-          await Promise.all((pm.files || []).map(f => c.add('audio/pet/' + f).catch(() => {})));
+          await Promise.all((pm.files || []).map(f => ac.add('audio/pet/' + f).catch(() => {})));
         }
       } catch (err) { /* 语音包没缓存成功也还能在线播放 */ }
     }).then(() => self.skipWaiting())
@@ -51,7 +54,7 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== AUDIO).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -107,17 +110,16 @@ self.addEventListener('fetch', e => {
 
   // 音频 / 图标 / 清单：缓存优先，离线可播。
   // 带 ?v= 的请求不做忽略参数的兜底匹配，否则升级后还会拿到旧文件（例如语音包重录）。
+  const isAudio = /\/audio\//.test(reqUrl.pathname);
+  const store = isAudio ? AUDIO : CACHE;
   e.respondWith(
-    caches.match(req).then(hit => hit ||
-      (reqUrl.search ? Promise.resolve(null) : caches.match(req, { ignoreSearch: true })).then(h2 => h2 ||
+    caches.open(store).then(c => c.match(req).then(hit => hit ||
+      (reqUrl.search ? Promise.resolve(null) : c.match(req, { ignoreSearch: true })).then(h2 => h2 ||
         fetch(req).then(res => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then(c => c.put(req, copy));
-          }
+          if (res && res.ok) c.put(req, res.clone());
           return res;
         })
       )
-    )
+    ))
   );
 });

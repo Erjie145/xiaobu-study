@@ -23,7 +23,8 @@
       canvas: 'ipad11', sound: true, soundVolume: 0.5,
       voiceMode: 'recorded', voiceURI: '', repeat: false,
       oralCount: 5, oralMinutes: 8, ocrKey: '', onlineVoice: true, zhVoiceURI: '', petVoice: true, petVoiceStyle: 'sweet',
-      grade: 5, term: 1, book: 'wy2024', mathLevel: 'normal'
+      grade: 5, term: 1, book: 'wy2024', mathLevel: 'normal',
+      dictKeyboard: true
     },
     tasks: {}, checkins: {}, stars: 0, starUsed: 0, bestStreak: 0,
     mistakes: [], customWords: [], counters: { dictation: 0, math: 0, oral: 0 },
@@ -83,7 +84,7 @@
     return true;
   };
 
-  /* ================= v42 · 天禄讲题 =================
+  /* ================= v43 · 字母键盘 =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -1276,6 +1277,25 @@
     const custom = db.customWords.length ? [{ id: 'custom', name: '我的词库', words: db.customWords }] : [];
     return bookUnits().concat(custom);
   }
+  /* v43：听写自带的字母键盘。iPad 上不弹系统键盘，题目和输入框不会被顶出屏幕。
+     不想要的话底下有「换成系统键盘」，随时可以换回来。 */
+  const KB_ROWS = [
+    ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
+    ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
+    ['z', 'x', 'c', 'v', 'b', 'n', 'm']
+  ];
+  function dictKeyboardHtml() {
+    return '<div class="kb">' +
+      KB_ROWS.map((row, i) =>
+        '<div class="kb-row' + (i === 1 ? ' kb-indent' : '') + '">' +
+        (i === 2 ? '<button class="kb-key kb-del" data-action="dict-key" data-k="del" aria-label="删除一个字母">⌫</button>' : '') +
+        row.map(k => '<button class="kb-key" data-action="dict-key" data-k="' + k + '">' + k + '</button>').join('') +
+        (i === 2 ? '<button class="kb-key kb-del" data-action="dict-key" data-k="clear" aria-label="全部清空">清空</button>' : '') +
+        '</div>').join('') +
+      '<div class="kb-row"><button class="kb-key kb-space" data-action="dict-key" data-k="space">空格</button>' +
+      '<button class="kb-key kb-go" data-action="dict-submit">提交</button></div>' +
+      '</div>';
+  }
   function renderDict() {
     const D2 = S.dict;
     let body = '';
@@ -1314,6 +1334,11 @@
       const fb = D2.checked ?
         (D2.lastOK ? '<div class="fb-ok">写对了，很棒</div>' :
           '<div class="fb-no">差一点点</div><div class="fb-answer">正确拼写：<b>' + esc(cur.w) + '</b> · ' + esc(cur.zh) + '<br><span class="muted tiny">' + esc(cur.tip || '') + '</span></div>') : '';
+      const kbOn = db.settings.dictKeyboard !== false;
+      const kbHtml = D2.checked ? '' :
+        (kbOn ? dictKeyboardHtml() : '') +
+        '<div class="kb-switch"><button data-action="dict-kb-toggle">' +
+        (kbOn ? '换成系统键盘' : '换成字母键盘') + '</button></div>';
       body =
         '<div class="card"><div class="card-h">' + ic('volume') + '<h2>听写进行中</h2><span class="sub">第 ' + (D2.idx + 1) + ' / ' + D2.queue.length + ' 个</span>' +
         '<button class="btn ghost sm" data-action="dict-back">结束</button></div>' +
@@ -1325,8 +1350,10 @@
         '<div style="margin:6px 0 10px">' + voiceChipHtml() + '</div>' +
         '<div class="tiny muted">点喇叭可以反复听</div>' + hintHtml +
         '<input class="spell-input ' + (D2.checked ? (D2.lastOK ? 'right' : 'wrong') : '') + '" data-model="dict.input" ' +
-        'value="' + esc(D2.input) + '" placeholder="在这里拼写" autocomplete="off" autocapitalize="off" spellcheck="false" ' + (D2.checked ? 'disabled' : '') + '>' +
+        'value="' + esc(D2.input) + '" placeholder="在这里拼写" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" ' +
+        (D2.checked ? 'disabled' : (kbOn ? 'readonly inputmode="none"' : '')) + '>' +
         '<div class="dict-feedback">' + fb + '</div>' +
+        kbHtml +
         '<div class="dict-actions">' +
         (D2.checked
           ? '<button class="btn lg mint" data-action="dict-next">' + (D2.idx + 1 >= D2.queue.length ? '查看结果' : '下一个') + ic('arrow', 'sm') + '</button>'
@@ -2663,7 +2690,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v42 · 天禄讲题</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v43 · 字母键盘</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -3009,6 +3036,34 @@
       render(); speak(q[0].w);
     },
     'dict-play'() { if (S.dict.queue[S.dict.idx]) speak(S.dict.queue[S.dict.idx].w); },
+    /* 屏上字母键盘：只改输入框的值，不整页重绘，所以不会闪、也不会打断发音 */
+    'dict-key'(el) {
+      const d = S.dict;
+      if (d.stage !== 'run' || d.checked) return;
+      const k = el.dataset.k;
+      let v = String(d.input || '');
+      if (k === 'del') v = v.slice(0, -1);
+      else if (k === 'clear') v = '';
+      else if (k === 'space') { if (v && !/\s$/.test(v)) v += ' '; }
+      else v += k;
+      if (v.length > 40) v = v.slice(0, 40);
+      d.input = v;
+      const inp = document.querySelector('[data-model="dict.input"]');
+      if (inp) { inp.value = v; inp.classList.remove('right', 'wrong'); }
+    },
+    'dict-kb-toggle'() {
+      const wasScreenKb = db.settings.dictKeyboard !== false;
+      db.settings.dictKeyboard = !wasScreenKb;
+      save();
+      render();
+      if (wasScreenKb) {
+        const inp = document.querySelector('[data-model="dict.input"]');
+        if (inp) inp.focus();
+        toast('已换成系统键盘');
+      } else {
+        toast('已换回字母键盘');
+      }
+    },
     'dict-hint'() { S.dict.hint = true; render(); },
     'dict-skip'() { S.dict.input = ''; H['dict-submit'](null, true); },
     'dict-submit'(el, forced) {
@@ -3405,7 +3460,7 @@
   };
 
   /* ---------------- 事件绑定 ---------------- */
-  const QUIET = { 'dict-submit': 1, 'dict-skip': 1, 'dict-start': 1, 'math-judge': 1, 'math-quiz-submit': 1, checkin: 1, 'toggle-task': 1, 'mk-master': 1 };
+  const QUIET = { 'dict-submit': 1, 'dict-skip': 1, 'dict-start': 1, 'math-judge': 1, 'math-quiz-submit': 1, checkin: 1, 'toggle-task': 1, 'mk-master': 1, 'dict-key': 1, 'dict-kb-toggle': 1 };
   /* 天禄小窝：零食拖拽（鼠标 / 触摸通用） */
   document.addEventListener('pointerdown', e => {
     if (S.tab !== 'pet') return;
