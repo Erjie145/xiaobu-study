@@ -378,14 +378,16 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.7}
 .mk-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}
 
 /* ---------- 弹窗 / 提示 ---------- */
-.modal-mask{position:fixed;inset:0;background:rgba(35,38,62,.42);backdrop-filter:blur(3px);z-index:60;display:grid;place-items:center;padding:18px;animation:fade .2s}
-.modal{background:#fff;border-radius:22px;width:min(520px,100%);max-height:88vh;overflow:auto;padding:24px;box-shadow:var(--shadow-lg)}
+.modal-mask{position:fixed;inset:0;background:rgba(35,38,62,.42);backdrop-filter:blur(3px);z-index:60;display:grid;place-items:center;padding:18px;padding-top:calc(18px + env(safe-area-inset-top));padding-bottom:calc(18px + env(safe-area-inset-bottom));animation:fade .2s}
+/* iOS Safari 的 vh 会把浏览器工具栏算进去，弹窗因此比可视区还高、底部按钮被裁掉；
+   dvh 才是真正看得见的高度，老浏览器自动退回上一行 */
+.modal{background:#fff;border-radius:22px;width:min(520px,100%);max-height:88vh;max-height:88dvh;overflow:auto;padding:24px;padding-bottom:calc(24px + env(safe-area-inset-bottom));box-shadow:var(--shadow-lg)}
 .modal.wide{width:min(680px,100%)}
 .modal-h{display:flex;align-items:center;gap:10px;margin-bottom:18px}
 .modal-h h3{margin:0;font-size:18px;flex:1}
 .modal-h .x{padding:6px;border-radius:9px;color:var(--muted)}
 .modal-h .x:hover{background:var(--bg)}
-.modal-foot{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}
+.modal-foot{display:flex;justify-content:flex-end;gap:9px;margin-top:20px;flex-wrap:wrap}
 .toast{
   position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);
   background:#2c2f45;color:#fff;padding:11px 20px;border-radius:13px;font-size:13.5px;
