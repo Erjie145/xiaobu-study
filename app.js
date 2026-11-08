@@ -83,7 +83,7 @@
     return true;
   };
 
-  /* ================= v41 · 天禄讲题 =================
+  /* ================= v42 · 天禄讲题 =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -625,6 +625,9 @@
     let cur = null;
     let timer = null;
     let token = 0;
+    let pool = [];
+    /* 语音包文件改过内容（剪掉首尾静音），加版本号让 iPad 拿到新文件 */
+    const VER = '?v=42';
     const CN = '零一二三四五六七八九';
     const U = ['', '十', '百', '千'];
     const SEC = ['', '万', '亿'];
@@ -697,7 +700,9 @@
       token++;
       clearTimeout(timer);
       timer = null;
-      if (cur) { try { cur.onended = null; cur.onerror = null; cur.pause(); } catch (e) { } cur = null; }
+      pool.forEach(a => { try { a.onended = null; a.onerror = null; a.pause(); } catch (e) { } });
+      pool = [];
+      cur = null;
     }
     /* lines 元素是字符串（固定句）或 {expr:'36+27'}（算式）。
        返回 false 表示语音包不可用，调用方应退回在线发音。 */
@@ -705,27 +710,49 @@
       stop();
       const my = ++token;
       if (!manifest || !Object.keys(manifest).length) return false;
-      /* 句子之间换口气（120ms），数字/运算积木之间几乎连读（25ms），否则会一顿一顿 */
+      /* 音频文件的首尾静音已经剪掉了，这里只需要极短的换气：
+         句子之间 90ms，数字/运算积木之间 0ms（靠音频尾部 45ms 余量自然连读） */
       const items = [];
       lines.forEach(x => {
-        if (typeof x === 'string') { if (manifest[hashText(x)]) items.push({ t: x, gap: 120 }); }
+        if (typeof x === 'string') { if (manifest[hashText(x)]) items.push({ t: x, gap: 90 }); }
         else if (x && x.expr) {
           const cs = exprChars(x.expr);
-          if (cs) cs.forEach(c => { if (manifest[hashText(c)]) items.push({ t: c, gap: 25 }); });
+          if (cs) cs.forEach(c => { if (manifest[hashText(c)]) items.push({ t: c, gap: 0 }); });
         }
       });
       if (!items.length) return false;
-      let i = 0;
+      const dir = 'audio/lesson/' + style + '/';
+      /* 同时只留两个 Audio：一个在响，下一个已经缓冲好，接缝几乎听不出来 */
+      const mk = t => {
+        const a = new Audio(dir + hashText(t) + '.mp3' + VER);
+        a.preload = 'auto';
+        pool.push(a);
+        return a;
+      };
+      let a0 = mk(items[0].t);
+      let a1 = items.length > 1 ? mk(items[1].t) : null;
+      let k = 0;
+      const finish = () => { cur = null; a0 = a1 = null; pool = []; if (onEnd) { try { onEnd(); } catch (e) { } } };
       const step = () => {
         if (my !== token) return;
-        if (i >= items.length) { cur = null; if (onEnd) { try { onEnd(); } catch (e) { } } return; }
-        const it = items[i++];
-        const a = new Audio('audio/lesson/' + style + '/' + hashText(it.t) + '.mp3');
+        if (!a0) { finish(); return; }
+        const a = a0, it = items[k];
         cur = a;
-        a.onended = () => { if (cur === a) cur = null; timer = setTimeout(step, it.gap); };
-        a.onerror = () => { if (cur === a) cur = null; timer = setTimeout(step, 20); };
+        let advanced = false;
+        const next = () => {
+          if (advanced) return;
+          advanced = true;
+          if (my !== token) return;
+          if (cur === a) cur = null;
+          a0 = a1;
+          a1 = items[k + 2] ? mk(items[k + 2].t) : null;
+          k++;
+          timer = setTimeout(step, it.gap);
+        };
+        a.onended = next;
+        a.onerror = next;
         const pr = a.play();
-        if (pr && pr.catch) pr.catch(() => { if (cur === a) cur = null; timer = setTimeout(step, 20); });
+        if (pr && pr.catch) pr.catch(() => { if (my === token) next(); });
       };
       step();
       return true;
@@ -2636,7 +2663,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v41 · 天禄讲题</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v42 · 天禄讲题</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
