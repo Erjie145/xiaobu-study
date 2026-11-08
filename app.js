@@ -34,7 +34,7 @@
       avatar: '', pic: '',            /* v26：自定义宠物图（压缩后的 dataURL） */
       earned: { checkin: false, oral: 0, dict: 0, master: 0 }, log: []
     },
-    /* v38：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
+    /* v39：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
     sync: {
       token: '', owner: '', repo: 'xiaobu-sync', on: false,
       lastAt: 0, sha: '', updatedAt: 0, device: '', err: ''
@@ -64,11 +64,11 @@
     // v26 首次升级：自定义宠物图，老数据补空字符串（表示用默认天禄）
     db.pet.avatar = typeof db.pet.avatar === 'string' ? db.pet.avatar : '';
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
-    // v38：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
+    // v39：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
     db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
     if (!db.sync.device) db.sync.device = uid();
   } catch (e) { db = defaultDB(); }
-  /* v38：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
+  /* v39：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
   const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0 };
   function scheduleSync(ms) {
     if (!db || !db.sync || !db.sync.on || !db.sync.token) return;
@@ -83,7 +83,7 @@
     return true;
   };
 
-  /* ================= v38 · 普通话语音 =================
+  /* ================= v39 · 讲解真人语音 =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -588,14 +588,19 @@
      用它兜底，不再退回难听的浏览器机器音。用 <audio> 元素播放，可绕过跨域限制。 */
   const OnlineVoice = (function () {
     let cur = null;
-    function urlFor(text) {
+    function urlFor(text, le) {
+      // 英文单词走有道；中文整句走百度翻译的真人语音（有道中文只支持单词级，整句会报错）
+      if (le === 'zh') return 'https://fanyi.baidu.com/gettts?lan=zh&spd=5&source=web&text=' + encodeURIComponent(text);
       return 'https://dict.youdao.com/dictvoice?audio=' + encodeURIComponent(text) + '&le=en';
     }
-    function play(text, rate, onStart) {
+    function stop() {
+      if (cur) { try { cur.onended = null; cur.onerror = null; cur.pause(); } catch (e) { } cur = null; }
+    }
+    function play(text, rate, onStart, le) {
       return new Promise((resolve, reject) => {
         try {
-          if (cur) { try { cur.onended = null; cur.pause(); } catch (e) { } }
-          const a = new Audio(urlFor(text));
+          stop();
+          const a = new Audio(urlFor(text, le));
           a.preload = 'auto';
           if (rate && a.playbackRate !== undefined) { try { a.playbackRate = Math.min(2, Math.max(0.5, rate)); } catch (e) { } }
           a.onended = () => { if (cur === a) cur = null; resolve(); };
@@ -607,7 +612,7 @@
         } catch (e) { reject(e); }
       });
     }
-    return { play: play };
+    return { play: play, stop: stop };
   })();
 
   function pickVoice() {
@@ -1604,24 +1609,28 @@
     s = s.replace(/([，、；：])\s*([。！？])/g, '$2');
     s = s.replace(/^[，、。；：\s]+/, '');
     s = s.replace(/([，、；：])\s*$/g, '。');
-    // 4) 把破折号、省略号换成短停顿，语流更顺
+    // 4) 数学符号翻译成读法：合成引擎直接读"+""="会跳过或念错
+    s = s.replace(/＝/g, '等于').replace(/=/g, '等于');
+    s = s.replace(/＋/g, '加').replace(/\+/g, '加');
+    s = s.replace(/×/g, '乘以').replace(/[*✕✖]/g, '乘以');
+    s = s.replace(/÷/g, '除以').replace(/(\d+)\s*\/\s*(\d+)/g, '$2分之$1');   // 1/2 读「二分之一」
+    s = s.replace(/−|－/g, '减').replace(/(\d)\s*-\s*(\d)/g, '$1减$2');
+    s = s.replace(/</g, '小于').replace(/>/g, '大于');
+    s = s.replace(/(\d+)\s*%/g, '百分之$1');
+    s = s.replace(/\s*&\s*/g, '和');
+    // 5) 把破折号、省略号换成短停顿，语流更顺
     s = s.replace(/…+|\.{3,}/g, '，');
     s = s.replace(/—{2,}|-{2,}/g, '，');
     s = s.replace(/[（(]\s*[）)]/g, '');
     return s.trim();
   }
-  function speakChinese(text, onEnd) {
+  /* 设备自带朗读（离线兜底）。iPad 的婷婷/美嘉比较机械，所以只在没有网络时用。 */
+  function speakChineseDevice(parts, onEnd, token) {
     if (!('speechSynthesis' in window)) { toast('当前浏览器不支持语音讲解'); return false; }
     try {
-      stopChinese();       // 取消上一段，并把残留的分句队列作废
       const v = pickMandarinVoice();
-      const clean = speakableText(text);
-      if (!clean) { toast('这句话没有可朗读的文字'); if (onEnd) { try { onEnd(); } catch (e) { } } return false; }
-      // 长句拆成短句逐句朗读：设备语音读长段落容易「一口气念完」很机械，
-      // 拆开后每句之间自然换气，听感更接近老师面对面讲题。
-      const parts = clean.split(/(?<=[。！？])/).map(x => x.trim()).filter(Boolean);
       let i = 0;
-      const my = ++zhToken;     // 本次讲解的令牌；被 stopChinese / 宠物打断后不再继续念
+      const my = token || ++zhToken;
       const next = () => {
         if (my !== zhToken) return;
         if (i >= parts.length) { if (onEnd) { try { onEnd(); } catch (e) { } } return; }
@@ -1639,10 +1648,42 @@
       return true;
     } catch (e) { return false; }
   }
+  function speakChinese(text, onEnd) {
+    stopChinese();       // 取消上一段，并把残留的分句队列作废
+    const clean = speakableText(text);
+    if (!clean) { toast('这句话没有可朗读的文字'); if (onEnd) { try { onEnd(); } catch (e) { } } return false; }
+    const my = ++zhToken;     // 本次讲解的令牌；被 stopChinese / 宠物打断后不再继续念
+    // 长句拆成短句逐句朗读：每句之间自然换气，听感更接近老师面对面讲题
+    const parts = clean.split(/(?<=[。！？])/).map(x => x.trim()).filter(Boolean);
+    // 默认用在线真人语音（自然得多）；选了具体设备声线、或关掉在线发音时走设备朗读
+    const zhSel = String(db.settings.zhVoiceURI || '');
+    const useOnline = db.settings.onlineVoice !== false && (zhSel === '' || zhSel === 'online');
+    if (useOnline) {
+      let i = 0;
+      const next = () => {
+        if (my !== zhToken) return;
+        if (i >= parts.length) { if (onEnd) { try { onEnd(); } catch (e) { } } return; }
+        const t = parts[i++];
+        OnlineVoice.play(t, 0.94, null, 'zh').then(() => {
+          zhGapTimer = setTimeout(next, 130);
+        }).catch(() => {
+          // 在线没连上（断网/被拦）：从这句起整段退回设备朗读
+          if (my !== zhToken) return;
+          stopChinese();
+          zhToken = my;
+          speakChineseDevice(parts.slice(i - 1), onEnd, my);
+        });
+      };
+      next();
+      return true;
+    }
+    return speakChineseDevice(parts, onEnd, my);
+  }
   function stopChinese() {
     zhToken++;                     // 让还在排队的分句全部作废
     clearTimeout(zhGapTimer);
     zhGapTimer = null;
+    try { OnlineVoice.stop(); } catch (e) { }
     try { window.speechSynthesis.cancel(); } catch (e) { }
   }
 
@@ -2199,7 +2240,7 @@
       toast(rate >= 1 ? '太棒了！全部完成，获得 ' + stars + ' 颗星星' : '打卡成功，完成 ' + Math.round(rate * 100) + '%，获得 ' + stars + ' 颗星星');
     },
 
-    /* ---- v38 家庭同步 ---- */
+    /* ---- v39 家庭同步 ---- */
     'sync-start'() {
       openModal('<div class="modal wide">' + modalHead('开启家庭同步') +
         '<div class="tiny muted" style="line-height:2">' +
@@ -2313,9 +2354,13 @@
         ['auto', '自适应窗口（铺满屏幕）']
       ].map(o => '<option value="' + o[0] + '"' + ((d.canvas || 'follow') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('');
       const vol = d.soundVolume == null ? 50 : Math.round(d.soundVolume * 100);
-      const zhVoiceOpts = '<option value="">自动选择普通话人声（推荐）</option>' + chineseVoices().map(v =>
-        '<option value="' + esc(v.voiceURI) + '"' + (d.zhVoiceURI === v.voiceURI ? ' selected' : '') + '>' +
-        esc((v.name || 'Voice') + ' · ' + v.lang) + '</option>').join('');
+      const zhSel = String(d.zhVoiceURI || '');
+      const zhVoiceOpts =
+        '<option value="online"' + (zhSel === '' || zhSel === 'online' ? ' selected' : '') + '>在线真人发音（推荐 · 自然亲切）</option>' +
+        '<option value="device"' + (zhSel === 'device' ? ' selected' : '') + '>设备朗读（离线可用）</option>' +
+        chineseVoices().map(v =>
+          '<option value="' + esc(v.voiceURI) + '"' + (zhSel === v.voiceURI ? ' selected' : '') + '>设备 · ' +
+          esc((v.name || 'Voice') + ' ' + v.lang) + '</option>').join('');
       openModal('<div class="modal wide">' + modalHead('设置') +
         '<div class="form-row">' +
         '<div class="field"><label>孩子的名字 / 昵称</label><input class="input" data-model="draft.name" value="' + esc(d.name) + '" placeholder="例：朵朵"></div>' +
@@ -2347,7 +2392,8 @@
         '<div class="tiny muted" style="margin-top:6px">如果听到的还是旧的机器朗读：到「设置 → 版本与更新」点一次「检查更新并刷新」即可，打卡记录不会丢。</div>' +
 
         '<div class="divider"></div><div class="section-title">AI 讲错题 · 声音（普通话）</div>' +
-        '<div class="field"><label>讲解用的普通话人声</label><select class="input" data-model="draft.zhVoiceURI">' + zhVoiceOpts + '</select></div>' +
+        '<div class="field"><label>AI 讲错题 · 发音（普通话）</label><select class="input" data-model="draft.zhVoiceURI">' + zhVoiceOpts + '</select>' +
+        '<div class="tiny muted" style="margin-top:6px">在线真人发音自然得多，推荐；断网时自动改用设备朗读。加号、等于号等会先翻译成「加」「等于」再读，不会念错。</div></div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="try-zh">' + ic('volume', 'sm') + '试听普通话讲解</button>' +
         '<span class="tiny muted">讲解固定用<b>普通话</b>，已自动排除 iPad 里的粤语声线（zh-HK / Sin-ji）。听起来还不对，就在这里换一个普通话人声再试听。</span></div>' +
 
@@ -2418,7 +2464,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v38 · 普通话语音</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v39 · 讲解真人语音</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -2524,7 +2570,7 @@
       db.settings.zhVoiceURI = String(d.zhVoiceURI || '');
       const ok = speakChinese('小朋友你好，我是辟邪。我们用普通话一起把这道题弄懂：先看清题目，再一步一步算，最后检查一遍。');
       db.settings.zhVoiceURI = old;
-      toast(ok ? '正在用普通话试听（已排除粤语声线）' : '当前浏览器不支持语音朗读');
+      toast(ok ? '正在用普通话试听' : '当前浏览器不支持语音朗读');
     },
     'save-settings'() {
       const d = S.draft || {};
@@ -2544,7 +2590,7 @@
       db.settings.onlineVoice = !(d.onlineVoice === '0' || d.onlineVoice === 0 || d.onlineVoice === false);
       db.settings.zhVoiceURI = String(d.zhVoiceURI || '');
       db.settings.petVoice = !(d.petVoice === '0' || d.petVoice === 0 || d.petVoice === false);
-      db.settings.petVoiceStyle = (d.petVoiceStyle === 'soft' || d.petVoiceStyle === 'boy') ? d.petVoiceStyle : 'sweet';
+      db.settings.petVoiceStyle = PET_STYLES.some(x => x.id === d.petVoiceStyle) ? d.petVoiceStyle : 'sweet';
       db.settings.grade = Math.min(6, Math.max(1, parseInt(d.grade, 10) || 5));
       db.settings.term = parseInt(d.term, 10) === 2 ? 2 : 1;
       db.settings.book = BOOKS.some(x => x.id === d.book) ? d.book : 'wy2024';
@@ -3260,7 +3306,7 @@
 
   /* ---------------- 启动 ---------------- */
   render();
-  /* v38：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
+  /* v39：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
   if (db.sync && db.sync.on && db.sync.token) {
     setTimeout(() => { syncNow('boot'); }, 2500);
     setInterval(() => {
