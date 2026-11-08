@@ -4,7 +4,7 @@
   "description": "五年级学习陪伴：作业打卡、英语听写、作业拍照检查（数学/语文/英语）与错题讲解",
   "lang": "zh-CN",
   "id": "xiaobu-study",
-  "start_url": "./?v=39",
+  "start_url": "./?v=40",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",

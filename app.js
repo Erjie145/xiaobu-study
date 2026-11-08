@@ -34,7 +34,7 @@
       avatar: '', pic: '',            /* v26：自定义宠物图（压缩后的 dataURL） */
       earned: { checkin: false, oral: 0, dict: 0, master: 0 }, log: []
     },
-    /* v39：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
+    /* v40：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
     sync: {
       token: '', owner: '', repo: 'xiaobu-sync', on: false,
       lastAt: 0, sha: '', updatedAt: 0, device: '', err: ''
@@ -64,11 +64,11 @@
     // v26 首次升级：自定义宠物图，老数据补空字符串（表示用默认天禄）
     db.pet.avatar = typeof db.pet.avatar === 'string' ? db.pet.avatar : '';
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
-    // v39：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
+    // v40：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
     db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
     if (!db.sync.device) db.sync.device = uid();
   } catch (e) { db = defaultDB(); }
-  /* v39：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
+  /* v40：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
   const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0 };
   function scheduleSync(ms) {
     if (!db || !db.sync || !db.sync.on || !db.sync.token) return;
@@ -83,7 +83,7 @@
     return true;
   };
 
-  /* ================= v39 · 讲解真人语音 =================
+  /* ================= v40 · 天禄讲题 =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -614,6 +614,176 @@
     }
     return { play: play, stop: stop };
   })();
+
+  /* ---------- 讲题语音：用天禄的声音念 ----------
+     讲解句子是每次现拼的，浏览器里合成不出天禄的声音，所以把「固定句型 + 知识点句库」
+     提前用 6 种宠物声线录好（audio/lesson），运行时按句式拼接播放；
+     题目里的长句子、答案数字只上屏、不硬读，避免用另一种声音串台。 */
+  const LessonVoice = (function () {
+    let manifest = null;
+    let loading = null;
+    let cur = null;
+    let timer = null;
+    let token = 0;
+    const CN = '零一二三四五六七八九';
+    const U = ['', '十', '百', '千'];
+    const SEC = ['', '万', '亿'];
+
+    function hashText(str) {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+      return h.toString(36);
+    }
+    function ready() {
+      if (manifest) return Promise.resolve(manifest);
+      if (!loading) {
+        loading = fetch('audio/lesson/index.json', { cache: 'force-cache' })
+          .then(r => r.json()).then(j => (manifest = (j && j.lines) || {}))
+          .catch(() => (manifest = {}));
+      }
+      return loading;
+    }
+    function readInt(str) {
+      str = String(str).replace(/^0+(?=\d)/, '');
+      if (str === '0') return '零';
+      const secs = [];
+      for (let i = str.length; i > 0; i -= 4) secs.unshift(str.slice(Math.max(0, i - 4), i));
+      let out = '';
+      secs.forEach((sec, idx) => {
+        const su = SEC[secs.length - 1 - idx];
+        let part = '', zero = false;
+        for (let j = 0; j < sec.length; j++) {
+          const d = +sec[j], pos = sec.length - 1 - j;
+          if (d === 0) { zero = true; continue; }
+          if (zero && part) part += '零';
+          zero = false;
+          part += CN[d] + U[pos];
+        }
+        if (part) {
+          if (out && (zero || /^0/.test(sec))) out += '零';
+          out += part + su;
+        }
+      });
+      return out.replace(/^一十/, '十');
+    }
+    function readNumber(str) {
+      const [ip, fp] = String(str).split('.');
+      let out = readInt(ip || '0');
+      if (fp) out += '点' + fp.split('').map(c => CN[+c] || '').join('');
+      return out;
+    }
+    /* 纯数字算式才逐字读；带汉字的应用题题干只上屏 */
+    function exprChars(text) {
+      const t = String(text == null ? '' : text).replace(/\s/g, '');
+      if (!t || !/^[\d.＋+\-−×*÷/=()（）]+$/.test(t)) return null;
+      const map = { '+': '加', '＋': '加', '-': '减', '−': '减', '×': '乘以', '*': '乘以', '÷': '除以', '/': '除以', '=': '等于' };
+      const out = [];
+      let i = 0;
+      while (i < t.length) {
+        const c = t[i];
+        if (/[\d.]/.test(c)) {
+          let j = i;
+          while (j < t.length && /[\d.]/.test(t[j])) j++;
+          out.push(...readNumber(t.slice(i, j)).split(''));
+          i = j;
+        } else {
+          if (map[c]) out.push(map[c]);
+          i++;
+        }
+      }
+      return out.length ? out : null;
+    }
+    function stop() {
+      token++;
+      clearTimeout(timer);
+      timer = null;
+      if (cur) { try { cur.onended = null; cur.onerror = null; cur.pause(); } catch (e) { } cur = null; }
+    }
+    /* lines 元素是字符串（固定句）或 {expr:'36+27'}（算式）。
+       返回 false 表示语音包不可用，调用方应退回在线发音。 */
+    function play(lines, style, onEnd) {
+      stop();
+      const my = ++token;
+      if (!manifest || !Object.keys(manifest).length) return false;
+      /* 句子之间换口气（120ms），数字/运算积木之间几乎连读（25ms），否则会一顿一顿 */
+      const items = [];
+      lines.forEach(x => {
+        if (typeof x === 'string') { if (manifest[hashText(x)]) items.push({ t: x, gap: 120 }); }
+        else if (x && x.expr) {
+          const cs = exprChars(x.expr);
+          if (cs) cs.forEach(c => { if (manifest[hashText(c)]) items.push({ t: c, gap: 25 }); });
+        }
+      });
+      if (!items.length) return false;
+      let i = 0;
+      const step = () => {
+        if (my !== token) return;
+        if (i >= items.length) { cur = null; if (onEnd) { try { onEnd(); } catch (e) { } } return; }
+        const it = items[i++];
+        const a = new Audio('audio/lesson/' + style + '/' + hashText(it.t) + '.mp3');
+        cur = a;
+        a.onended = () => { if (cur === a) cur = null; timer = setTimeout(step, it.gap); };
+        a.onerror = () => { if (cur === a) cur = null; timer = setTimeout(step, 20); };
+        const pr = a.play();
+        if (pr && pr.catch) pr.catch(() => { if (cur === a) cur = null; timer = setTimeout(step, 20); });
+      };
+      step();
+      return true;
+    }
+    return { ready: ready, play: play, stop: stop, hashText: hashText, exprChars: exprChars, readNumber: readNumber };
+  })();
+
+  /* 讲解的「口播稿」：只说固定套路和知识点，具体题目、答案交给屏幕 */
+  function lessonLines(m) {
+    const lines = [];
+    const add = t => { if (t) lines.push(t); };
+    if (m.kind === 'general' && m.subject === '语文') {
+      add('我们一起来看看这一题。');
+      add('写错的字，我们一个一个字对清楚。');
+      add('正确答案和你的答案都在屏幕上，我们对照着看。');
+      add('建议先把正确答案认真读一遍，再遮住答案默写两遍，最后自己检查一遍。');
+      add('明天再复习一次，写对了就可以标记已掌握啦。');
+      return lines;
+    }
+    if (m.subject === '英语') {
+      add('我们一起来看看这个单词。');
+      add('这个单词怎么拼、是什么意思，我们看屏幕。');
+      add('建议先把正确答案认真读一遍，再遮住答案默写两遍，最后自己检查一遍。');
+      add('明天再复习一次，写对了就可以标记已掌握啦。');
+      return lines;
+    }
+    add('我们一起来看看这道题。');
+    if (LessonVoice.exprChars(m.q)) { add('我先把题目的数字读给你听。'); lines.push({ expr: m.q }); }
+    else add('题目在屏幕上，我们一起读一遍。');
+    add('正确答案和你的答案都在屏幕上，我们对照着看。');
+    const L = D.lessons[m.tag] || D.lessons[inferTag(m.q)];
+    if (L) {
+      add('这道题考的知识点是' + L.title + '。');
+      if (L.points && L.points.length) { add('先记住这几句话。'); L.points.forEach(add); }
+      const steps = (m.solution && m.solution.length) ? m.solution : (L.steps || []);
+      if (steps.length) { add('解题可以按这个顺序来。'); steps.forEach(add); }
+      if (L.pitfalls && L.pitfalls.length) { add('最容易出错的地方是。'); L.pitfalls.forEach(add); }
+      if (L.similar && L.similar.length) add('再自己试一道类似的题：' + L.similar[0].q + '。答案是' + L.similar[0].a + '。');
+    }
+    add('把思路说出来，再在本子上重新算一遍，就真正弄懂啦。');
+    return lines;
+  }
+
+  /* 讲错题：优先用天禄的声音（语音包），没装好就退回在线真人发音 */
+  function speakLesson(m, onEnd) {
+    const sel = String(db.settings.zhVoiceURI || '');
+    if (sel !== '' && sel !== 'pet') return speakChinese(aiLessonText(m), onEnd);
+    stopChinese();
+    const lines = lessonLines(m);
+    const style = db.settings.petVoiceStyle || 'sweet';
+    const my = zhToken;
+    LessonVoice.ready().then(() => {
+      if (my !== zhToken) return;
+      const ok = LessonVoice.play(lines, style, () => { if (onEnd) { try { onEnd(); } catch (e) { } } });
+      if (!ok) speakChinese(aiLessonText(m), onEnd);
+    });
+    return true;
+  }
 
   function pickVoice() {
     const saved = db.settings.voiceURI;
@@ -1684,6 +1854,7 @@
     clearTimeout(zhGapTimer);
     zhGapTimer = null;
     try { OnlineVoice.stop(); } catch (e) { }
+    try { LessonVoice.stop(); } catch (e) { }
     try { window.speechSynthesis.cancel(); } catch (e) { }
   }
 
@@ -2240,7 +2411,7 @@
       toast(rate >= 1 ? '太棒了！全部完成，获得 ' + stars + ' 颗星星' : '打卡成功，完成 ' + Math.round(rate * 100) + '%，获得 ' + stars + ' 颗星星');
     },
 
-    /* ---- v39 家庭同步 ---- */
+    /* ---- v40 家庭同步 ---- */
     'sync-start'() {
       openModal('<div class="modal wide">' + modalHead('开启家庭同步') +
         '<div class="tiny muted" style="line-height:2">' +
@@ -2356,7 +2527,8 @@
       const vol = d.soundVolume == null ? 50 : Math.round(d.soundVolume * 100);
       const zhSel = String(d.zhVoiceURI || '');
       const zhVoiceOpts =
-        '<option value="online"' + (zhSel === '' || zhSel === 'online' ? ' selected' : '') + '>在线真人发音（推荐 · 自然亲切）</option>' +
+        '<option value="pet"' + (zhSel === '' || zhSel === 'pet' ? ' selected' : '') + '>天禄的声音（推荐 · 和宠物同一个声音）</option>' +
+        '<option value="online"' + (zhSel === 'online' ? ' selected' : '') + '>在线真人发音（不是天禄的声音）</option>' +
         '<option value="device"' + (zhSel === 'device' ? ' selected' : '') + '>设备朗读（离线可用）</option>' +
         chineseVoices().map(v =>
           '<option value="' + esc(v.voiceURI) + '"' + (zhSel === v.voiceURI ? ' selected' : '') + '>设备 · ' +
@@ -2393,7 +2565,7 @@
 
         '<div class="divider"></div><div class="section-title">AI 讲错题 · 声音（普通话）</div>' +
         '<div class="field"><label>AI 讲错题 · 发音（普通话）</label><select class="input" data-model="draft.zhVoiceURI">' + zhVoiceOpts + '</select>' +
-        '<div class="tiny muted" style="margin-top:6px">在线真人发音自然得多，推荐；断网时自动改用设备朗读。加号、等于号等会先翻译成「加」「等于」再读，不会念错。</div></div>' +
+        '<div class="tiny muted" style="margin-top:6px">「天禄的声音」是把讲题的固定句式、知识点提前录好的（6 种声线跟着「天禄的声音」走），题目和答案会显示在屏幕上；换成别的选项则改为在线合成整句朗读。</div></div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="try-zh">' + ic('volume', 'sm') + '试听普通话讲解</button>' +
         '<span class="tiny muted">讲解固定用<b>普通话</b>，已自动排除 iPad 里的粤语声线（zh-HK / Sin-ji）。听起来还不对，就在这里换一个普通话人声再试听。</span></div>' +
 
@@ -2464,7 +2636,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v39 · 讲解真人语音</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v40 · 天禄讲题</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -2566,9 +2738,22 @@
     },
     'try-zh'() {
       const d = S.draft || {};
+      const sel = String(d.zhVoiceURI || '');
+      stopChinese();
+      if (sel === '' || sel === 'pet') {
+        const style = (S.draft && S.draft.petVoiceStyle) || db.settings.petVoiceStyle || 'sweet';
+        const my = zhToken;
+        LessonVoice.ready().then(() => {
+          if (my !== zhToken) return;
+          const ok = LessonVoice.play(['小朋友你好，我是辟邪。', '我们一起把这道题弄懂吧。'], style);
+          if (!ok) toast('讲题语音包还没下载好，连一下网再试');
+        });
+        toast('这是天禄讲题时的声音');
+        return;
+      }
       const old = db.settings.zhVoiceURI;
-      db.settings.zhVoiceURI = String(d.zhVoiceURI || '');
-      const ok = speakChinese('小朋友你好，我是辟邪。我们用普通话一起把这道题弄懂：先看清题目，再一步一步算，最后检查一遍。');
+      db.settings.zhVoiceURI = sel;
+      const ok = speakChinese('小朋友你好，我是辟邪。我们一起把这道题弄懂：先看清题目，再一步一步算，最后检查一遍。');
       db.settings.zhVoiceURI = old;
       toast(ok ? '正在用普通话试听' : '当前浏览器不支持语音朗读');
     },
@@ -3163,7 +3348,7 @@
       if (S.mk.speakingId === id) { stopChinese(); S.mk.speakingId = null; render(); return; }
       const m = db.mistakes.find(x => x.id === id); if (!m) return;
       S.mk.speakingId = id;
-      const ok = speakChinese(aiLessonText(m), () => {
+      const ok = speakLesson(m, () => {
         if (S.mk.speakingId === id) { S.mk.speakingId = null; render(); }
       });
       if (!ok) S.mk.speakingId = null;
@@ -3306,7 +3491,7 @@
 
   /* ---------------- 启动 ---------------- */
   render();
-  /* v39：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
+  /* v40：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
   if (db.sync && db.sync.on && db.sync.token) {
     setTimeout(() => { syncNow('boot'); }, 2500);
     setInterval(() => {
