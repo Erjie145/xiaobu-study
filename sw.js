@@ -2,8 +2,8 @@
  * v13：所有静态资源带版本号，强制绕过 iPad 上残留的旧 HTTP / SW 缓存。
  * 以后升级：把 CACHE 与 V 一起 +1，并同步 index.html / manifest 里的 ?v= 参数。
  */
-const CACHE = 'xiaobu-v47';
-const V = '?v=47';
+const CACHE = 'xiaobu-v48';
+const V = '?v=48';
 /* 音频单独一个缓存：改代码升版本时不会把几万个发音文件一起清掉重下。
    音频内容有改动时，把 AUDIO 的名字和 app.js 里的语音包 ?v= 一起 +1。 */
 const AUDIO = 'xiaobu-audio-v42';

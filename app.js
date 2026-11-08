@@ -90,6 +90,11 @@
     db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
     if (!db.sync.device) db.sync.device = uid();
   } catch (e) { db = defaultDB(); }
+  /* v48：饱食度记录。老数据（和新装）第一次进来时，天禄当作刚吃饱，之后开始计时 */
+  if (!Array.isArray(db.pet.feedLog)) {
+    db.pet.feedLog = [{ t: Date.now(), e: 100 }];
+    persist();
+  }
   /* v41：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
   const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0, info: null };
   function scheduleSync(ms) {
@@ -420,6 +425,22 @@
       if ((RP[k] | 0) > (out.pet[k] | 0)) { out.pet[k] = RP[k]; mark(); }
     });
     out.pet.food = Object.assign({}, out.pet.food || {});
+    /* v48：喂食记录按时间取并集（同一毫秒只算一次），只留最近 3 天——
+       更早的早就饿回去了，留着只会让数据越来越大 */
+    const fl = [];
+    const seenFeedT = new Set();
+    const addFeed = f => {
+      const t = TS(f && f.t);
+      if (!t || seenFeedT.has(t)) return;
+      seenFeedT.add(t);
+      fl.push({ t: t, e: Math.max(0, Math.min(100, Number(f.e) || 0)) });
+    };
+    (out.pet.feedLog || []).forEach(addFeed);
+    (RP.feedLog || []).forEach(addFeed);
+    fl.sort((a, b) => a.t - b.t);
+    const flKept = fl.filter(f => f.t >= Date.now() - 3 * 24 * 3600000);
+    if (flKept.length !== (out.pet.feedLog || []).length) mark();
+    out.pet.feedLog = flKept;
     for (const k in (RP.food || {})) {
       if ((RP.food[k] | 0) > (out.pet.food[k] | 0)) { out.pet.food[k] = RP.food[k]; mark(); }
     }
@@ -1192,8 +1213,11 @@
   ];
   function renderNav() {
     const badge = db.mistakes.filter(m => !m.mastered).length;
+    const petHungry = satietyNow() < 30;
     const html = NAV.map(n => '<button class="nav-item ' + (S.tab === n.id ? 'active' : '') + '" data-action="nav" data-tab="' + n.id + '">' +
-      ic(n.icon) + '<span>' + n.name + '</span>' + (n.id === 'mistakes' && badge ? '<span class="dot">' + badge + '</span>' : '') + '</button>').join('');
+      ic(n.icon) + '<span>' + n.name + '</span>' +
+      (n.id === 'mistakes' && badge ? '<span class="dot">' + badge + '</span>' : '') +
+      (n.id === 'pet' && petHungry ? '<span class="dot hg-dot"></span>' : '') + '</button>').join('');
     $('#nav').innerHTML = html;
     /* 手机底部导航多一个「设置」：手机上侧栏是隐藏的，顶栏统计条塞不下齿轮，
        直接做成常驻 tab 最稳，任何屏幕宽度都能点到 */
@@ -2310,22 +2334,83 @@
      v21 · 天禄小窝：积分 → 商城 → 拖拽喂养
      规则：当天完成作业打卡、且错题全部弄懂后才解锁
      ========================================================== */
+  /* v48：每种食物能顶多久（饱食度点数）。100 点 = 48 小时，
+     所以一天要喂 2～3 次，零食才不会断顿。 */
   const SHOP = [
-    { id: 'apple',  name: '红苹果', emoji: '🍎', price: 6,  yum: '咔嚓咔嚓，好脆好甜' },
-    { id: 'banana', name: '香蕉',   emoji: '🍌', price: 5,  yum: '软软糯糯，最喜欢啦' },
-    { id: 'strawberry', name: '草莓', emoji: '🍓', price: 8, yum: '酸酸甜甜，一口一个' },
-    { id: 'grape',  name: '葡萄',   emoji: '🍇', price: 7,  yum: '噗啾，汁水好多' },
-    { id: 'cookie', name: '小饼干', emoji: '🍪', price: 4,  yum: '咔滋咔滋，好香呀' },
-    { id: 'cake',   name: '小蛋糕', emoji: '🍰', price: 10, yum: '唔～奶油好绵' },
-    { id: 'candy',  name: '水果糖', emoji: '🍬', price: 3,  yum: '吧唧吧唧，甜甜的' },
-    { id: 'carrot', name: '胡萝卜', emoji: '🥕', price: 3,  yum: '嘎嘣脆，眼睛会变亮哦' },
-    { id: 'milk',   name: '牛奶',   emoji: '🥛', price: 4,  yum: '咕嘟咕嘟，好舒服' },
-    { id: 'juice',  name: '果汁',   emoji: '🧃', price: 5,  yum: '咕噜～冰凉凉的' },
-    { id: 'orb',    name: '彩色宝珠', emoji: '🔮', price: 14, rare: true,
+    { id: 'apple',  name: '红苹果', emoji: '🍎', price: 6,  energy: 20, yum: '咔嚓咔嚓，好脆好甜' },
+    { id: 'banana', name: '香蕉',   emoji: '🍌', price: 5,  energy: 22, yum: '软软糯糯，最喜欢啦' },
+    { id: 'strawberry', name: '草莓', emoji: '🍓', price: 8, energy: 18, yum: '酸酸甜甜，一口一个' },
+    { id: 'grape',  name: '葡萄',   emoji: '🍇', price: 7,  energy: 18, yum: '噗啾，汁水好多' },
+    { id: 'cookie', name: '小饼干', emoji: '🍪', price: 4,  energy: 14, yum: '咔滋咔滋，好香呀' },
+    { id: 'cake',   name: '小蛋糕', emoji: '🍰', price: 10, energy: 34, yum: '唔～奶油好绵' },
+    { id: 'candy',  name: '水果糖', emoji: '🍬', price: 3,  energy: 10, yum: '吧唧吧唧，甜甜的' },
+    { id: 'carrot', name: '胡萝卜', emoji: '🥕', price: 3,  energy: 16, yum: '嘎嘣脆，眼睛会变亮哦' },
+    { id: 'milk',   name: '牛奶',   emoji: '🥛', price: 4,  energy: 16, yum: '咕嘟咕嘟，好舒服' },
+    { id: 'juice',  name: '果汁',   emoji: '🧃', price: 5,  energy: 14, yum: '咕噜～冰凉凉的' },
+    { id: 'orb',    name: '彩色宝珠', emoji: '🔮', price: 14, energy: 55, rare: true,
       yum: '咕噜咕噜～肚子里在放小烟花！' }
   ];
   const SHOP_BY = {};
   SHOP.forEach(x => { SHOP_BY[x.id] = x; });
+
+  /* ================= v48 · 饥饿值 =================
+   * 天禄有一个 0～100 的饱食度：满格 100，48 小时匀速掉到 0（每小时约 2.08），
+   * 也就是一天要喂两三次才不会饿。
+   * 不存「当前值」而存「每一次喂食」，打开时按时间推一遍：
+   * 这样两台设备各自算出来的数字一定一样，同步时把喂食记录合起来就行。
+   */
+  const HUNGER_HOURS = 48;
+  const HUNGER_PER_MS = 100 / (HUNGER_HOURS * 3600000);
+  const FEED_KEEP_MS = 72 * 3600000;      // 只保留最近 3 天的喂食记录
+
+  function feedLogOf() {
+    return (db.pet && Array.isArray(db.pet.feedLog)) ? db.pet.feedLog : [];
+  }
+  /* 从空肚子开始，按时间把每次喂食的能量加上去，路上按小时掉，最多 100 */
+  function satietyAt(ts) {
+    const list = feedLogOf().slice().sort((a, b) => TS(a.t) - TS(b.t));
+    let v = 0, last = 0;
+    for (const f of list) {
+      const t = TS(f.t);
+      if (!t) continue;
+      if (last && t > last) v = Math.max(0, v - (t - last) * HUNGER_PER_MS);
+      v = Math.min(100, v + Math.max(0, Number(f.e) || 0));
+      last = t;
+    }
+    if (last && ts > last) v = Math.max(0, v - (ts - last) * HUNGER_PER_MS);
+    return Math.max(0, Math.min(100, v));
+  }
+  const satietyNow = () => satietyAt(Date.now());
+
+  /* 饱食度 → 状态文案与颜色 */
+  function hungerState(v) {
+    if (v >= 80) return { key: 'full', text: '吃得饱饱的', face: '😋', color: '#35b37e' };
+    if (v >= 55) return { key: 'ok', text: '肚子暖暖的', face: '🙂', color: '#5bbf8a' };
+    if (v >= 30) return { key: 'peck', text: '有点想吃了', face: '😐', color: '#e8a33d' };
+    if (v >= 10) return { key: 'hungry', text: '肚子咕咕叫', face: '🥺', color: '#e8794d' };
+    if (v > 0.5) return { key: 'starve', text: '饿坏了，快喂我', face: '😣', color: '#d9534f' };
+    return { key: 'empty', text: '饿扁啦…', face: '😵', color: '#c0392b' };
+  }
+  function satietyLeftText(v) {
+    if (v <= 0.5) return '已经饿扁了，喂一口就活过来';
+    const hours = v / (100 / HUNGER_HOURS);
+    if (hours >= 1) return '还能撑大约 ' + Math.floor(hours) + ' 小时';
+    return '还能撑大约 ' + Math.max(1, Math.round(hours * 60)) + ' 分钟';
+  }
+  /* 饿了（低于 30）就自动开小窝，别因为没打卡把孩子的心头肉饿坏了 */
+  const petHungryOpen = () => satietyNow() < 30;
+
+  function hungerHtml(compact) {
+    const v = satietyNow();
+    const st = hungerState(v);
+    return '<div class="hunger-card' + (compact ? ' compact' : '') + '">' +
+      '<div class="hg-top"><span class="hg-face">' + st.face + '</span>' +
+      '<div class="hg-main"><b>' + st.text + '</b><span>' + satietyLeftText(v) + '</span></div>' +
+      '<span class="hg-num">' + Math.round(v) + '<i>/100</i></span></div>' +
+      '<div class="hg-bar"><i style="width:' + Math.max(2, v) + '%;background:' + st.color + '"></i></div>' +
+      (compact ? '' : '<div class="hg-tip">饱食度 48 小时会慢慢掉光，每天来喂天禄两三次刚好～</div>') +
+      '</div>';
+  }
 
   /* v22 · 星星罐：1 颗星星 = 10 积分。星星是攒下来的成就，兑换后计入累计，不会掉徽章 */
   const STAR_RATE = 10;
@@ -2421,6 +2506,8 @@
   function renderPet() {
     petDay();
     const P = db.pet, lock = petLock();
+    const hungryOpen = petHungryOpen();
+    const satNow = satietyNow();
     const earnedToday = (lock.checked ? 10 : 0) + P.earned.oral * 5 + P.earned.dict * 5 + P.earned.master * 3;
     const head = '<div class="points-card">' +
       '<div class="points-main"><span>我的积分</span><b>' + P.points + '</b></div>' +
@@ -2428,12 +2515,12 @@
       '<div class="points-tip">做作业打卡 +10 · 口算练习 +5（全对 +8）· 英语听写 +5（全对 +8）· 弄懂一道错题 +3<br>星星也能当钱花：<b>1 颗星星 = 10 积分</b></div>' +
       '</div>';
 
-    if (!lock.ok) {
+    if (!lock.ok && !hungryOpen) {
       const rows = [
         { ok: lock.checked, text: '完成今天的作业打卡', hint: lock.checked ? '已完成' : '还没打卡' },
         { ok: lock.todo === 0, text: '把错题本里的题都弄懂', hint: lock.todo === 0 ? '全部掌握' : '还剩 ' + lock.todo + ' 道' }
       ];
-      return '<div class="pet-page">' + head + starJarHtml() +
+      return '<div class="pet-page">' + head + hungerHtml(true) + starJarHtml() +
         '<div class="lock-card">' +
         '<div class="lock-emoji">🔒</div>' +
         '<h2>天禄的小窝还没开门</h2>' +
@@ -2456,7 +2543,10 @@
         '<span class="food-count">×' + P.food[x.id] + '</span></div>').join('') :
       '<div class="shelf-empty">柜子空空的<br><span>用积分换点吃的吧</span></div>';
 
-    return '<div class="pet-page">' + head + starJarHtml() +
+    /* 饿的时候没打卡也开门，但要说清楚原因，别让孩子以为规则变了 */
+    const unlockedByHunger = hungryOpen && !lock.ok;
+    return '<div class="pet-page">' + head + hungerHtml() + (unlockedByHunger ?
+      '<div class="hg-note">天禄饿得等不及了，今天先喂它，作业打卡别忘了补上哦～</div>' : '') + starJarHtml() +
       '<div class="yard">' +
       '<div class="yard-pet">' +
       '<div class="mouth-zone" id="mouthZone">' +
@@ -2465,7 +2555,7 @@
       '</div>' +
       '<div class="yard-bubble" id="yardBubble">' + (petFeedMsg ?
         '<b>吧唧吧唧～</b>' + esc(petFeedMsg) :
-        '把右边的零食拖到我嘴边，或者点一下也行～') + '</div>' +
+        (satNow < 30 ? '饿得直哼哼…快喂我一口吧～' : '把右边的零食拖到我嘴边，或者点一下也行～')) + '</div>' +
       '</div>' +
       '<div class="shelf"><div class="shelf-title">我的零食柜</div>' +
       '<div class="shelf-list" id="shelfList">' + shelf + '</div>' +
@@ -2492,10 +2582,17 @@
     const P = db.pet;
     if (!P.food[id] || !SHOP_BY[id]) return;
     if (feeding) return;
+    /* v48：已经吃得饱饱的，再喂既吃不下也浪费，先拦一下 */
+    if (satietyNow() >= 99) { toast('天禄已经吃得饱饱的啦，等它消化一下再喂～'); return; }
     feeding = true;
+    const energy = SHOP_BY[id].energy || 16;
     P.food[id]--;
     if (P.food[id] <= 0) delete P.food[id];
     P.fed++; P.fondness++;
+    /* v48：记下这次喂食，饱食度按时间推出来 */
+    P.feedLog = Array.isArray(P.feedLog) ? P.feedLog : [];
+    P.feedLog.push({ t: Date.now(), e: energy });
+    P.feedLog = P.feedLog.filter(f => TS(f.t) >= Date.now() - FEED_KEEP_MS).slice(-80);
     save();
     AudioSys.wake();
     chewSound(SHOP_BY[id].rare ? 4 : 2);
@@ -2897,7 +2994,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v47 · 同步可见</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v48 · 天禄会饿</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -3103,6 +3200,8 @@
       db.pet = Object.assign(defaultDB().pet, p.pet || {});
       db.pet.food = db.pet.food || {};
       db.pet.earned = Object.assign({ checkin: false, oral: 0, dict: 0, master: 0 }, db.pet.earned || {});
+      // v48：老备份没有喂食记录时，当成刚吃饱
+      if (!Array.isArray(db.pet.feedLog)) db.pet.feedLog = [{ t: Date.now(), e: 100 }];
       /* 旧备份没有累计字段时，把当时的余额当成累计获得，免得下次同步被算成负数 */
       if (!p.pet || p.pet.pointsIn == null || p.pet.pointsOut == null) {
         db.pet.pointsOut = Math.max(0, (p.pet && p.pet.pointsOut) | 0);
@@ -3806,6 +3905,30 @@
 
   /* ---------------- 启动 ---------------- */
   render();
+  /* v48：天禄饿了就提醒一次（同一天只提一次，别烦人） */
+  if (satietyNow() < 30 && db.settings.hungerTip !== today()) {
+    setTimeout(() => {
+      db.settings.hungerTip = today();
+      persist();
+      renderNav();
+      toast('天禄饿了，去小窝喂它一口吧');
+    }, 2400);
+  }
+  /* v48：App 一直开着时饱食度也要跟着走——每分钟轻量更新一次，不整页重绘 */
+  setInterval(() => {
+    if (document.visibilityState !== 'visible' || S.tab !== 'pet') return;
+    const card = document.querySelector('.hunger-card');
+    if (!card) return;
+    const v = satietyNow(), st = hungerState(v);
+    const num = card.querySelector('.hg-num');
+    const bar = card.querySelector('.hg-bar > i');
+    const t1 = card.querySelector('.hg-main b');
+    const t2 = card.querySelector('.hg-main span');
+    if (num) num.innerHTML = Math.round(v) + '<i>/100</i>';
+    if (bar) { bar.style.width = Math.max(2, v) + '%'; bar.style.background = st.color; }
+    if (t1) t1.textContent = st.text;
+    if (t2) t2.textContent = satietyLeftText(v);
+  }, 60000);
   /* v41：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
   if (db.sync && db.sync.on && db.sync.token) {
     setTimeout(() => { syncNow('boot'); }, 2500);

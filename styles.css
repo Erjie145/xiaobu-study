@@ -855,3 +855,35 @@ html[data-orient="portrait"] .shop-grid{grid-template-columns:repeat(auto-fill,m
   .kb-key.kb-del{font-size:12.5px}
   .kb-key.kb-go{font-size:14px}
 }
+
+/* ---------- v48 天禄的饱食度 ---------- */
+.hunger-card{
+  background:#fff;border:1px solid var(--line);border-radius:18px;
+  padding:14px 16px 12px;margin:12px 0;
+  box-shadow:0 1px 2px rgba(24,31,58,.05);
+}
+.hg-top{display:flex;align-items:center;gap:12px}
+.hg-face{font-size:26px;line-height:1}
+.hg-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.hg-main b{font-size:15px;color:var(--ink);line-height:1.3}
+.hg-main span{font-size:12px;color:var(--muted)}
+.hg-num{font-size:20px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.hg-num i{font-style:normal;font-size:11px;color:var(--muted);font-weight:500}
+.hg-bar{height:9px;border-radius:99px;background:#eef0f7;margin-top:11px;overflow:hidden}
+.hg-bar>i{display:block;height:100%;border-radius:99px;transition:width .45s ease,background .3s ease}
+.hg-tip{margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.7}
+.hunger-card.compact{padding:12px 14px 10px;margin:10px 0 12px}
+.hunger-card.compact .hg-tip{display:none}
+.hg-note{
+  margin:-2px 0 12px;padding:9px 13px;border-radius:12px;
+  background:#fff6e8;color:#96631a;font-size:12.5px;line-height:1.7;
+}
+.nav-item .dot.hg-dot{
+  min-width:8px;width:8px;height:8px;padding:0;border-radius:50%;
+  background:#e8794d;font-size:0;
+}
+@media(max-width:767px){
+  .hunger-card{padding:12px 13px 10px;border-radius:16px}
+  .hg-face{font-size:23px}
+  .hg-num{font-size:18px}
+}
