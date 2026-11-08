@@ -34,7 +34,7 @@
       avatar: '', pic: '',            /* v26：自定义宠物图（压缩后的 dataURL） */
       earned: { checkin: false, oral: 0, dict: 0, master: 0 }, log: []
     },
-    /* v40：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
+    /* v41：家庭同步（令牌只存本机，绝不进入备份和上传内容） */
     sync: {
       token: '', owner: '', repo: 'xiaobu-sync', on: false,
       lastAt: 0, sha: '', updatedAt: 0, device: '', err: ''
@@ -64,11 +64,11 @@
     // v26 首次升级：自定义宠物图，老数据补空字符串（表示用默认天禄）
     db.pet.avatar = typeof db.pet.avatar === 'string' ? db.pet.avatar : '';
     db.pet.pic = typeof db.pet.pic === 'string' ? db.pet.pic : '';
-    // v40：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
+    // v41：老数据补同步字段；device 是这台设备的固定编号，用于日志和冲突判断
     db.sync = Object.assign({ token: '', owner: '', repo: 'xiaobu-sync', on: false, lastAt: 0, sha: '', updatedAt: 0, device: '', err: '' }, db.sync || {});
     if (!db.sync.device) db.sync.device = uid();
   } catch (e) { db = defaultDB(); }
-  /* v40：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
+  /* v41：同步运行时状态。放在 save 之前声明，避免 TDZ（首启迁移会调用 save） */
   const SYNC = { lock: false, busy: null, timer: null, state: 'off', msg: '', err: '', tries: 0 };
   function scheduleSync(ms) {
     if (!db || !db.sync || !db.sync.on || !db.sync.token) return;
@@ -83,7 +83,7 @@
     return true;
   };
 
-  /* ================= v40 · 天禄讲题 =================
+  /* ================= v41 · 天禄讲题 =================
    * 两端共用一个 GitHub 账号下的私有仓库（默认 xiaobu-sync/data.json）。
    * 令牌只保存在本机 localStorage，不上传、不导出、不进备份。
    */
@@ -2411,7 +2411,7 @@
       toast(rate >= 1 ? '太棒了！全部完成，获得 ' + stars + ' 颗星星' : '打卡成功，完成 ' + Math.round(rate * 100) + '%，获得 ' + stars + ' 颗星星');
     },
 
-    /* ---- v40 家庭同步 ---- */
+    /* ---- v41 家庭同步 ---- */
     'sync-start'() {
       openModal('<div class="modal wide">' + modalHead('开启家庭同步') +
         '<div class="tiny muted" style="line-height:2">' +
@@ -2564,10 +2564,10 @@
         '<div class="tiny muted" style="margin-top:6px">如果听到的还是旧的机器朗读：到「设置 → 版本与更新」点一次「检查更新并刷新」即可，打卡记录不会丢。</div>' +
 
         '<div class="divider"></div><div class="section-title">AI 讲错题 · 声音（普通话）</div>' +
-        '<div class="field"><label>AI 讲错题 · 发音（普通话）</label><select class="input" data-model="draft.zhVoiceURI">' + zhVoiceOpts + '</select>' +
+        '<div class="field"><label>讲解用谁的声音</label><select class="input" data-model="draft.zhVoiceURI">' + zhVoiceOpts + '</select>' +
         '<div class="tiny muted" style="margin-top:6px">「天禄的声音」是把讲题的固定句式、知识点提前录好的（6 种声线跟着「天禄的声音」走），题目和答案会显示在屏幕上；换成别的选项则改为在线合成整句朗读。</div></div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="try-zh">' + ic('volume', 'sm') + '试听普通话讲解</button>' +
-        '<span class="tiny muted">讲解固定用<b>普通话</b>，已自动排除 iPad 里的粤语声线（zh-HK / Sin-ji）。听起来还不对，就在这里换一个普通话人声再试听。</span></div>' +
+        '<span class="tiny muted">点一下用当前选项试听一句。孩子听着别扭就换个选项。</span></div>' +
 
         '<div class="divider"></div><div class="section-title">音效</div>' +
         '<div class="form-row">' +
@@ -2636,7 +2636,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v40 · 天禄讲题</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v41 · 天禄讲题</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -3491,7 +3491,7 @@
 
   /* ---------------- 启动 ---------------- */
   render();
-  /* v40：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
+  /* v41：连过同步的设备，启动后自动拉一次（延迟 2.5 秒，先让界面出来） */
   if (db.sync && db.sync.on && db.sync.token) {
     setTimeout(() => { syncNow('boot'); }, 2500);
     setInterval(() => {

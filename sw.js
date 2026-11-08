@@ -2,8 +2,8 @@
  * v13：所有静态资源带版本号，强制绕过 iPad 上残留的旧 HTTP / SW 缓存。
  * 以后升级：把 CACHE 与 V 一起 +1，并同步 index.html / manifest 里的 ?v= 参数。
  */
-const CACHE = 'xiaobu-v40';
-const V = '?v=40';
+const CACHE = 'xiaobu-v41';
+const V = '?v=41';
 const ASSETS = [
   './',
   'index.html',
