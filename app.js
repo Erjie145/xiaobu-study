@@ -687,6 +687,8 @@
     dictPhoto: null,                       /* v26：听写拍照导入的临时状态 */
     mk: { filter: 'all', open: null, speakingId: null },
     baseEdit: null,                        /* v50：正在编辑的每日基础任务 */
+    baseBack: false,                       /* v51：基础任务编辑弹窗是否从设置页打开（关掉时回设置） */
+    keepDraft: false,                      /* v51：回到设置页时保留已输入未保存的设置草稿 */
     draft: null,
     pendingImport: null,
     modal: null
@@ -1369,25 +1371,7 @@
     }
     return cells;
   }
-  /* v50：今日清单里的「每日基础任务」入口 */
-  function baseBarHtml() {
-    const all = baseTasksOf();
-    const wd = weekdayOf(today());
-    const on = all.filter(b => baseOnDay(b, wd));
-    const names = on.slice(0, 3).map(b => b.content).join('、');
-    const more = on.length > 3 ? ' 等 ' + on.length + ' 项' : '';
-    const txt = !all.length
-      ? '还没设置。设一次以后，每天打开就自动加进清单'
-      : on.length
-        ? '今天 ' + on.length + ' 项：' + names + more
-        : '今天没有安排（' + all.length + ' 项模板已设置）';
-    return '<div class="base-bar' + (all.length ? '' : ' empty') + '">' +
-      '<span class="bb-ico">' + ic('refresh', 'sm') + '</span>' +
-      '<div class="bb-main"><b>每日基础任务</b><span>' + esc(txt) + '</span></div>' +
-      '<button class="btn ghost sm" data-action="base-open">' + (all.length ? '设置' : '去设置') + '</button></div>';
-  }
-
-  /* v50：编辑「每日基础任务」的弹窗。编辑中的内容放在 S.baseEdit，
+  /* v50：编辑「每日基础任务」的弹窗。v51 起入口移到设置弹窗里。
      只有点保存才写进 db。星期按钮的显示顺序是 一 二 三 四 五 六 日。 */
   const WD_ORDER = [1, 2, 3, 4, 5, 6, 0];
   function baseEditToHtml() {
@@ -1417,7 +1401,7 @@
       '<button class="btn ghost sm" data-action="base-all" data-days="0,6">只周末</button></div>' +
       (S.baseEdit.length ? rows : '<div class="ba-empty">还没有基础任务，点下面的「添加一项」开始设置</div>') +
       '<div class="btn-row" style="margin-top:14px"><button class="btn ghost sm" data-action="base-add">' + ic('plus', 'sm') + '添加一项</button></div>' +
-      '<div class="modal-foot"><button class="btn ghost" data-action="close-modal">取消</button>' +
+      '<div class="modal-foot"><button class="btn ghost" data-action="base-close">取消</button>' +
       '<button class="btn" data-action="base-save">' + ic('check', 'sm') + '保存</button></div></div>';
   }
   function openBaseEdit() {
@@ -1428,6 +1412,13 @@
     }));
     if (!S.baseEdit.length) S.baseEdit = [{ subject: '语文', content: '', minutes: 20, days: [0, 1, 2, 3, 4, 5, 6] }];
     openModal(baseEditToHtml());
+  }
+  /* v51：关掉基础任务编辑弹窗。从设置进来的（S.baseBack）就回到设置页，
+     并且保留设置里已输入、还没保存的内容；否则像普通弹窗一样直接关 */
+  function closeBaseModal() {
+    S.baseEdit = null;
+    if (S.baseBack) { S.baseBack = false; S.keepDraft = true; H['open-settings'](); }
+    else closeModal();
   }
   /* 把弹窗里正在编辑的内容收回 S.baseEdit（输入框可能还没触发过 input） */
   function collectBaseEdit() {
@@ -1497,7 +1488,6 @@
       '<div class="progress" style="margin-bottom:16px"><i style="width:' + pct + '%"></i></div>' +
       '<div class="task-list">' + taskHtml + '</div>' +
       '<div class="divider"></div>' +
-      baseBarHtml() +
       '<div class="section-title" style="margin-top:16px">添加一项作业</div>' +
       '<div class="form-row">' +
       '<div class="field narrow"><label>科目</label><select class="input" id="taskSubject"><option>语文</option><option>数学</option><option>英语</option><option>其他</option></select></div>' +
@@ -2945,8 +2935,15 @@
       if (el.dataset.tab !== 'mistakes') { stopChinese(); S.mk.speakingId = null; }
       S.tab = el.dataset.tab; window.scrollTo({ top: 0, behavior: 'smooth' }); render();
     },
-    'close-modal': closeModal,
-    mask(el, e) { if (e.target === el) closeModal(); },
+    'close-modal'() {
+      if (S.baseEdit) closeBaseModal();      /* v51：基础任务编辑弹窗 → 回设置页 */
+      else closeModal();
+    },
+    mask(el, e) {
+      if (e.target !== el) return;
+      if (S.baseEdit) closeBaseModal();
+      else closeModal();
+    },
     'cal-prev'() { S.cal.m--; if (S.cal.m < 0) { S.cal.m = 11; S.cal.y--; } render(); },
     'cal-next'() { S.cal.m++; if (S.cal.m > 11) { S.cal.m = 0; S.cal.y++; } render(); },
 
@@ -2984,8 +2981,9 @@
       save(); render();
     },
 
-    /* ---------- v50：每日基础任务 ---------- */
-    'base-open'() { openBaseEdit(); },
+    /* ---------- v50：每日基础任务（v51 起入口在设置弹窗里） ---------- */
+    'base-open'() { S.baseBack = true; openBaseEdit(); },   /* 记住要回设置页 */
+    'base-close'() { closeBaseModal(); },
     'base-add'() {
       collectBaseEdit();
       S.baseEdit.push({ subject: '语文', content: '', minutes: 20, days: [0, 1, 2, 3, 4, 5, 6] });
@@ -3045,7 +3043,8 @@
       save();
       const n = seedDayTasks();
       S.baseEdit = null;
-      closeModal(); render();
+      render();
+      closeBaseModal();                      /* v51：从设置进来就回设置页（保留未保存的设置草稿） */
       toast(list.length
         ? '已保存 ' + list.length + ' 项基础任务' + (n ? '，今天补了 ' + n + ' 项' : '')
         : '已清空基础任务');
@@ -3184,7 +3183,10 @@
 
     /* 设置 */
     'open-settings'() {
-      S.draft = JSON.parse(JSON.stringify(db.settings));
+      /* v51：从「每日基础任务」弹窗回来时保留已输入未保存的草稿（keepDraft），
+         正常打开设置则从 db.settings 重新取一份 */
+      if (!S.keepDraft || !S.draft) S.draft = JSON.parse(JSON.stringify(db.settings));
+      S.keepDraft = false;
       const d = S.draft;
       const voiceOpts = '<option value="">自动选择最佳人声</option>' + englishVoices().map(v =>
         '<option value="' + esc(v.voiceURI) + '"' + (d.voiceURI === v.voiceURI ? ' selected' : '') + '>' +
@@ -3277,6 +3279,19 @@
           '<button class="btn ghost sm" data-action="pet-img-reset">' + ic('refresh', 'sm') + '恢复默认天禄</button>' +
           '<span class="tiny muted">自定义后发音、喂食、积分都不受影响。</span></div>' +
 
+        '<div class="divider"></div><div class="section-title">每日基础任务</div>' +
+        (function () {
+          const bAll = baseTasksOf();
+          const bOn = bAll.filter(b => baseOnDay(b, weekdayOf(today()))).length;
+          return '<div class="tiny muted" style="line-height:1.8">每天固定要做的日常事项（朗读、口算、整理书包……）在这里设一次，之后每天打开「今日作业」就会自动加进清单，<b>已经打过的钩不会丢</b>；只在部分星期做的项，进去点亮对应的星期即可。</div>' +
+            '<div class="btn-row" style="margin-top:10px">' +
+            '<button class="btn ghost sm" data-action="base-open">' + ic('refresh', 'sm') +
+            (bAll.length ? '修改每日基础任务（' + bAll.length + ' 项）' : '去设置每日基础任务') + '</button>' +
+            '<span class="tiny muted">' + (bAll.length
+              ? (bOn ? '今天有 ' + bOn + ' 项会自动加进清单' : '今天没有安排基础任务')
+              : '还没设置，设置后每天自动出现在作业清单里') + '</span></div>';
+        })() +
+
         '<div class="divider"></div><div class="section-title">学习难度与课本</div>' +
         (function () {
           const dg = Math.min(6, Math.max(1, parseInt(d.grade, 10) || 5));
@@ -3309,7 +3324,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v50 · 每日基础任务</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v51 · 基础任务设置移入设置页</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +

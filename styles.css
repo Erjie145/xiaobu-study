@@ -914,20 +914,7 @@ html[data-orient="portrait"] .shop-grid{grid-template-columns:repeat(auto-fill,m
   .pet-hearts i{animation:none;opacity:0}
 }
 
-/* ---------- v50 每日基础任务 ---------- */
-.base-bar{
-  display:flex;align-items:center;gap:11px;padding:11px 13px;border-radius:14px;
-  background:linear-gradient(135deg,#f6f3ff,#fdfbff);border:1px solid #ebe5fb;
-}
-.base-bar.empty{background:#fafafd;border-color:var(--line)}
-.bb-ico{
-  width:30px;height:30px;border-radius:10px;background:#fff;color:var(--primary-deep);
-  display:grid;place-items:center;flex:none;border:1px solid #eee8fb;
-}
-.bb-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
-.bb-main b{font-size:13.5px;color:var(--ink);line-height:1.35}
-.bb-main span{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
+/* ---------- v50 每日基础任务（v51 起入口在设置弹窗，首页入口条已移除） ---------- */
 .ba-quick{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .ba-quick span{font-size:12px;color:var(--muted)}
 .ba-row{border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:10px;background:#fff}
@@ -949,8 +936,6 @@ html[data-orient="portrait"] .shop-grid{grid-template-columns:repeat(auto-fill,m
   border:1px dashed var(--line);border-radius:14px;
 }
 @media(max-width:480px){
-  .base-bar{padding:10px 11px;gap:9px}
-  .bb-main span{font-size:11.5px}
   /* 手机上第一行放 科目 + 分钟 + 删除，内容框独占一行，不然写不下 */
   .ba-line1{flex-wrap:wrap}
   .ba-line1 select.ba-sub{width:auto;flex:1;min-width:70px}
