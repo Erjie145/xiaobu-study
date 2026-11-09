@@ -27,6 +27,10 @@
       dictKeyboard: true
     },
     tasks: {}, checkins: {}, stars: 0, starUsed: 0, bestStreak: 0,
+    /* v50：每日基础任务模板（可指定周几生效），每天首次打开时自动加进当天清单。
+       baseGone 是「删掉的模板项」，taskGone 是「当天删掉的任务」，都跟着数据同步，
+       否则另一台设备会把删掉的又补回来。 */
+    baseTasks: [], baseGone: {}, taskGone: {},
     mistakes: [], customWords: [], counters: { dictation: 0, math: 0, oral: 0 },
     /* v46：错题删除名单（id → 删除时间）。删掉的错题在另一台设备上还有旧副本，
        同步时「取并集」会把它复活，所以删除要留下记录一起同步。
@@ -82,6 +86,10 @@
     db.mkDeleted = (db.mkDeleted && typeof db.mkDeleted === 'object' && !Array.isArray(db.mkDeleted)) ? db.mkDeleted : {};
     // v47：内容指纹名单（另一台 id 不同的同一道题）
     db.mkGone = (db.mkGone && typeof db.mkGone === 'object' && !Array.isArray(db.mkGone)) ? db.mkGone : {};
+    // v50：每日基础任务模板
+    db.baseTasks = Array.isArray(db.baseTasks) ? db.baseTasks.filter(t => t && t.content) : [];
+    db.baseGone = (db.baseGone && typeof db.baseGone === 'object' && !Array.isArray(db.baseGone)) ? db.baseGone : {};
+    db.taskGone = (db.taskGone && typeof db.taskGone === 'object' && !Array.isArray(db.taskGone)) ? db.taskGone : {};
     // v47：历史数据里若有两条一模一样的错题（科目+日期+题目相同、id 不同），收成一条
     const mkBefore = Array.isArray(db.mistakes) ? db.mistakes.length : 0;
     dedupeMistakes();
@@ -323,6 +331,41 @@
       if (add) { tk[d] = Array.from(map.values()); mark(); }
     }
     out.tasks = tk;
+
+    /* v50：每日基础任务模板 + 两张删除名单。
+       模板按「科目+内容」并集（id 也由内容推出，重复项自然合并）；
+       删掉的模板项、当天删掉的任务都按时间取新的，避免另一台又补回来。 */
+    const bg = Object.assign({}, out.baseGone || {});
+    for (const k in (R.baseGone || {})) {
+      if (TS(R.baseGone[k]) > TS(bg[k])) { bg[k] = R.baseGone[k]; mark(); }
+    }
+    out.baseGone = bg;
+    const tg = Object.assign({}, out.taskGone || {});
+    for (const k in (R.taskGone || {})) {
+      if (TS(R.taskGone[k]) > TS(tg[k])) { tg[k] = R.taskGone[k]; mark(); }
+    }
+    out.taskGone = tg;
+    const bm = new Map();
+    (out.baseTasks || []).forEach(b => {
+      if (!b || !b.content) return;
+      const k = baseKeyOf(b);
+      if (bg[k]) return;
+      bm.set(k, b);
+    });
+    (R.baseTasks || []).forEach(b => {
+      if (!b || !b.content) return;
+      const k = baseKeyOf(b);
+      if (bg[k] || bm.has(k)) return;
+      bm.set(k, b); mark();
+    });
+    out.baseTasks = Array.from(bm.values());
+    /* 当天清单里已经被删掉的条目（另一台删的）顺手清掉 */
+    for (const d in out.tasks) {
+      const arr = out.tasks[d];
+      if (!Array.isArray(arr)) continue;
+      const kept = arr.filter(t => !tg[d + '|' + t.id]);
+      if (kept.length !== arr.length) { out.tasks[d] = kept; mark(); }
+    }
 
     // 错题本：先把两边的「已删除」名单合起来，按 id 并集，讲懂过就算讲懂
     const dead = Object.assign({}, out.mkDeleted || {});
@@ -643,6 +686,7 @@
     photo: { url: '', text: '', busy: false, name: '', subject: 'math', blob: null },
     dictPhoto: null,                       /* v26：听写拍照导入的临时状态 */
     mk: { filter: 'all', open: null, speakingId: null },
+    baseEdit: null,                        /* v50：正在编辑的每日基础任务 */
     draft: null,
     pendingImport: null,
     modal: null
@@ -652,6 +696,49 @@
 
   /* ---------------- 派生统计 ---------------- */
   function tasks(date) { return db.tasks[date] || []; }
+
+  /* ================= v50 · 每日基础任务 =================
+   * 家长可以设一份「每天都要做」的基础清单（朗读、口算、整理书包……），
+   * 每一项可以勾选周几生效，所以也能做出「工作日一套、周末一套」。
+   * 每天第一次打开「今日作业」时自动补进当天清单，已打钩的状态不受影响。
+   * 关键点：任务 id 用「科目+内容」推出来（两台设备生成同一个 id，同步不会重复）；
+   * 删掉的任务记进 taskGone，删掉模板项记进 baseGone，都跟着数据走，免得被另一台补回来。
+   */
+  const WD_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
+  function baseKeyOf(t) { return String(t.subject || '') + '|' + String(t.content || '').trim(); }
+  function baseTasksOf() { return Array.isArray(db.baseTasks) ? db.baseTasks : []; }
+  function weekdayOf(dateStr) {
+    const d = new Date(String(dateStr) + 'T00:00:00');
+    return isNaN(d.getTime()) ? new Date().getDay() : d.getDay();
+  }
+  function baseTaskId(t) { return 'base:' + baseKeyOf(t); }
+  /* 当天是否该出现这一项：days 为空 = 每天 */
+  function baseOnDay(t, wd) {
+    const days = Array.isArray(t.days) && t.days.length ? t.days : [0, 1, 2, 3, 4, 5, 6];
+    return days.indexOf(wd) >= 0;
+  }
+  /* 把今天该做的基础任务补进清单。可以在每次渲染前调用，重复调用不会重复添加 */
+  function seedDayTasks() {
+    const day = today();
+    const wd = weekdayOf(day);
+    const list = db.tasks[day] || [];
+    const have = new Set(list.map(t => baseKeyOf(t)));
+    const gone = db.taskGone || {};
+    let added = 0;
+    baseTasksOf().forEach(b => {
+      if (!baseOnDay(b, wd)) return;
+      const k = baseKeyOf(b);
+      if (have.has(k)) return;
+      if (gone[day + '|' + baseTaskId(b)]) return;      // 今天手动删掉了，别硬塞回来
+      list.push({
+        id: baseTaskId(b), subject: b.subject || '其他', content: String(b.content).trim(),
+        minutes: Math.min(180, Math.max(1, b.minutes | 0 || 20)), done: false, base: 1
+      });
+      have.add(k); added++;
+    });
+    if (added) { db.tasks[day] = list; save(); }
+    return added;
+  }
   function streak() {
     let n = 0, d = today();
     if (!db.checkins[d]) d = addDays(d, -1);
@@ -1282,6 +1369,94 @@
     }
     return cells;
   }
+  /* v50：今日清单里的「每日基础任务」入口 */
+  function baseBarHtml() {
+    const all = baseTasksOf();
+    const wd = weekdayOf(today());
+    const on = all.filter(b => baseOnDay(b, wd));
+    const names = on.slice(0, 3).map(b => b.content).join('、');
+    const more = on.length > 3 ? ' 等 ' + on.length + ' 项' : '';
+    const txt = !all.length
+      ? '还没设置。设一次以后，每天打开就自动加进清单'
+      : on.length
+        ? '今天 ' + on.length + ' 项：' + names + more
+        : '今天没有安排（' + all.length + ' 项模板已设置）';
+    return '<div class="base-bar' + (all.length ? '' : ' empty') + '">' +
+      '<span class="bb-ico">' + ic('refresh', 'sm') + '</span>' +
+      '<div class="bb-main"><b>每日基础任务</b><span>' + esc(txt) + '</span></div>' +
+      '<button class="btn ghost sm" data-action="base-open">' + (all.length ? '设置' : '去设置') + '</button></div>';
+  }
+
+  /* v50：编辑「每日基础任务」的弹窗。编辑中的内容放在 S.baseEdit，
+     只有点保存才写进 db。星期按钮的显示顺序是 一 二 三 四 五 六 日。 */
+  const WD_ORDER = [1, 2, 3, 4, 5, 6, 0];
+  function baseEditToHtml() {
+    const rows = S.baseEdit.map((b, i) => {
+      const days = Array.isArray(b.days) && b.days.length ? b.days : [0, 1, 2, 3, 4, 5, 6];
+      const every = days.length === 7;
+      return '<div class="ba-row" data-row="' + i + '">' +
+        '<div class="ba-line1">' +
+        '<select class="input ba-sub" data-ba="subject" data-i="' + i + '">' +
+        ['语文', '数学', '英语', '其他'].map(s => '<option' + ((b.subject || '语文') === s ? ' selected' : '') + '>' + s + '</option>').join('') +
+        '</select>' +
+        '<input class="input ba-con" data-ba="content" data-i="' + i + '" value="' + esc(b.content || '') + '" placeholder="例：朗读课文 15 分钟" maxlength="60">' +
+        '<input class="input ba-min" type="number" min="1" max="180" data-ba="minutes" data-i="' + i + '" value="' + (b.minutes || 20) + '">' +
+        '<button class="btn ghost sm ba-del" data-action="base-del" data-i="' + i + '" aria-label="删除这一项">' + ic('trash', 'sm') + '</button>' +
+        '</div>' +
+        '<div class="ba-days">' + WD_ORDER.map(d =>
+          '<button class="ba-day' + (days.indexOf(d) >= 0 ? ' on' : '') + '" data-action="base-day" data-i="' + i + '" data-d="' + d + '">' + WD_NAMES[d] + '</button>').join('') +
+          '<span class="ba-hint">' + (every ? '每天' : '点亮的星期才加') + '</span>' +
+          '</div></div>';
+    }).join('');
+    return '<div class="modal wide">' + modalHead('每日基础任务') +
+      '<div class="tiny muted" style="line-height:1.8;margin-bottom:12px">把每天都要做的事设在这里（朗读、口算、整理书包……）。' +
+      '每天第一次打开「今日作业」时自动加进清单，<b>已经打过的钩不会丢</b>；某项只在部分星期做，就点亮对应的星期。</div>' +
+      '<div class="ba-quick"><span>全部设为</span>' +
+      '<button class="btn ghost sm" data-action="base-all" data-days="0,1,2,3,4,5,6">每天</button>' +
+      '<button class="btn ghost sm" data-action="base-all" data-days="1,2,3,4,5">周一到周五</button>' +
+      '<button class="btn ghost sm" data-action="base-all" data-days="0,6">只周末</button></div>' +
+      (S.baseEdit.length ? rows : '<div class="ba-empty">还没有基础任务，点下面的「添加一项」开始设置</div>') +
+      '<div class="btn-row" style="margin-top:14px"><button class="btn ghost sm" data-action="base-add">' + ic('plus', 'sm') + '添加一项</button></div>' +
+      '<div class="modal-foot"><button class="btn ghost" data-action="close-modal">取消</button>' +
+      '<button class="btn" data-action="base-save">' + ic('check', 'sm') + '保存</button></div></div>';
+  }
+  function openBaseEdit() {
+    S.baseEdit = baseTasksOf().map(b => ({
+      subject: b.subject || '语文', content: b.content || '',
+      minutes: b.minutes || 20,
+      days: Array.isArray(b.days) && b.days.length ? b.days.slice() : [0, 1, 2, 3, 4, 5, 6]
+    }));
+    if (!S.baseEdit.length) S.baseEdit = [{ subject: '语文', content: '', minutes: 20, days: [0, 1, 2, 3, 4, 5, 6] }];
+    openModal(baseEditToHtml());
+  }
+  /* 把弹窗里正在编辑的内容收回 S.baseEdit（输入框可能还没触发过 input） */
+  function collectBaseEdit() {
+    if (!S.baseEdit) S.baseEdit = [];
+    document.querySelectorAll('.ba-row').forEach(row => {
+      const i = +row.dataset.row;
+      const cur = S.baseEdit[i];
+      if (!cur) return;
+      const sub = row.querySelector('[data-ba="subject"]');
+      const con = row.querySelector('[data-ba="content"]');
+      const min = row.querySelector('[data-ba="minutes"]');
+      if (sub) cur.subject = sub.value;
+      if (con) cur.content = con.value;
+      if (min) cur.minutes = Math.min(180, Math.max(1, parseInt(min.value, 10) || 20));
+    });
+  }
+  function refreshBaseDays(i) {
+    const row = document.querySelector('.ba-row[data-row="' + i + '"]');
+    if (!row) return;
+    const cur = S.baseEdit[i];
+    if (!cur) return;
+    const days = Array.isArray(cur.days) && cur.days.length ? cur.days : [0, 1, 2, 3, 4, 5, 6];
+    row.querySelectorAll('.ba-day').forEach(btn => {
+      btn.classList.toggle('on', days.indexOf(+btn.dataset.d) >= 0);
+    });
+    const hint = row.querySelector('.ba-hint');
+    if (hint) hint.textContent = days.length === 7 ? '每天' : '点亮的星期才加';
+  }
+
   function renderHome() {
     const list = tasks(today());
     const done = list.filter(t => t.done).length;
@@ -1322,7 +1497,8 @@
       '<div class="progress" style="margin-bottom:16px"><i style="width:' + pct + '%"></i></div>' +
       '<div class="task-list">' + taskHtml + '</div>' +
       '<div class="divider"></div>' +
-      '<div class="section-title">添加一项作业</div>' +
+      baseBarHtml() +
+      '<div class="section-title" style="margin-top:16px">添加一项作业</div>' +
       '<div class="form-row">' +
       '<div class="field narrow"><label>科目</label><select class="input" id="taskSubject"><option>语文</option><option>数学</option><option>英语</option><option>其他</option></select></div>' +
       '<div class="field"><label>作业内容</label><input class="input" id="taskContent" placeholder="例：完成练习册第 12 页" maxlength="60"></div>' +
@@ -2748,6 +2924,7 @@
   /* ---------------- 渲染入口 ---------------- */
   function render() {
     applyCanvas();
+    seedDayTasks();                    // v50：把今天的基础任务补进清单（幂等）
     renderNav(); renderTop(); renderSide();
     const v = $('#view');
     v.innerHTML = S.tab === 'home' ? renderHome() : S.tab === 'dict' ? renderDict() : S.tab === 'math' ? renderMath()
@@ -2795,7 +2972,84 @@
       const list = tasks(today());
       if (list.length && list.every(x => x.done)) { toast('全部完成啦，记得打卡'); confetti(); }
     },
-    'del-task'(el) { db.tasks[today()] = tasks(today()).filter(x => x.id !== el.dataset.id); save(); render(); },
+    'del-task'(el) {
+      const id = el.dataset.id, day = today();
+      db.tasks[day] = tasks(day).filter(x => x.id !== id);
+      /* v50：删的是基础任务就记一笔，否则下次打开（或另一台设备）又会自动补回来 */
+      if (String(id).indexOf('base:') === 0) {
+        db.taskGone = db.taskGone || {};
+        db.taskGone[day + '|' + id] = Date.now();
+        trimMap(db.taskGone, 400);
+      }
+      save(); render();
+    },
+
+    /* ---------- v50：每日基础任务 ---------- */
+    'base-open'() { openBaseEdit(); },
+    'base-add'() {
+      collectBaseEdit();
+      S.baseEdit.push({ subject: '语文', content: '', minutes: 20, days: [0, 1, 2, 3, 4, 5, 6] });
+      openModal(baseEditToHtml());
+      const i = S.baseEdit.length - 1;
+      setTimeout(() => {
+        const el = document.querySelector('.ba-row[data-row="' + i + '"] [data-ba="content"]');
+        if (el) el.focus();
+      }, 60);
+    },
+    'base-del'(el) {
+      collectBaseEdit();
+      S.baseEdit.splice(+el.dataset.i, 1);
+      openModal(baseEditToHtml());
+    },
+    'base-day'(el) {
+      collectBaseEdit();
+      const i = +el.dataset.i, d = +el.dataset.d;
+      const cur = S.baseEdit[i];
+      if (!cur) return;
+      let days = Array.isArray(cur.days) && cur.days.length ? cur.days.slice() : [0, 1, 2, 3, 4, 5, 6];
+      if (days.indexOf(d) >= 0) {
+        if (days.length === 1) { toast('至少要留一天哦'); return; }
+        days = days.filter(x => x !== d);
+      } else days.push(d);
+      cur.days = days.sort((a, b) => a - b);
+      refreshBaseDays(i);
+    },
+    'base-all'(el) {
+      collectBaseEdit();
+      const days = String(el.dataset.days).split(',').map(Number);
+      (S.baseEdit || []).forEach(b => { b.days = days.slice(); });
+      openModal(baseEditToHtml());
+    },
+    'base-save'() {
+      collectBaseEdit();
+      const list = [], seen = new Set();
+      (S.baseEdit || []).forEach(b => {
+        const c = String(b.content || '').trim();
+        if (!c) return;                                  // 空行直接忽略
+        const k = baseKeyOf({ subject: b.subject, content: c });
+        if (seen.has(k)) return;                          // 内容重复只留一条
+        seen.add(k);
+        const days = (Array.isArray(b.days) && b.days.length) ? b.days.slice().sort((x, y) => x - y) : [0, 1, 2, 3, 4, 5, 6];
+        list.push({
+          subject: b.subject || '其他', content: c,
+          minutes: Math.min(180, Math.max(1, b.minutes | 0 || 20)), days
+        });
+      });
+      /* 删掉的项记进 baseGone，重新加回来的从名单里划掉 —— 不然另一台同步时又会补回来 */
+      const oldKeys = new Set(baseTasksOf().map(baseKeyOf));
+      const newKeys = new Set(list.map(baseKeyOf));
+      oldKeys.forEach(k => { if (!newKeys.has(k)) db.baseGone[k] = Date.now(); });
+      newKeys.forEach(k => { if (db.baseGone[k]) delete db.baseGone[k]; });
+      trimMap(db.baseGone, 400);
+      db.baseTasks = list;
+      save();
+      const n = seedDayTasks();
+      S.baseEdit = null;
+      closeModal(); render();
+      toast(list.length
+        ? '已保存 ' + list.length + ' 项基础任务' + (n ? '，今天补了 ' + n + ' 项' : '')
+        : '已清空基础任务');
+    },
     checkin() {
       const list = tasks(today());
       if (!list.length) { toast('先添加今天的作业吧'); return; }
@@ -3055,7 +3309,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v49 · 点点天禄</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v50 · 每日基础任务</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -3275,6 +3529,10 @@
       db.counters = Object.assign({ dictation: 0, math: 0, oral: 0 }, p.counters || {});
       // v46：备份里的删除名单也一起恢复；导入是显式覆盖，以备份内容为准
       db.mkDeleted = (p.mkDeleted && typeof p.mkDeleted === 'object' && !Array.isArray(p.mkDeleted)) ? p.mkDeleted : {};
+      /* v50：基础任务模板与两张删除名单（老备份没有就留空） */
+      db.baseTasks = Array.isArray(p.baseTasks) ? p.baseTasks.filter(t => t && t.content) : [];
+      db.baseGone = (p.baseGone && typeof p.baseGone === 'object' && !Array.isArray(p.baseGone)) ? p.baseGone : {};
+      db.taskGone = (p.taskGone && typeof p.taskGone === 'object' && !Array.isArray(p.taskGone)) ? p.taskGone : {};
       dedupeMistakes();
       db.sync = Object.assign(defaultDB().sync, p.sync || {});
       db.sync.device = db.sync.device || uid();
