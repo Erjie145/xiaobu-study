@@ -317,7 +317,10 @@
     }
     out.checkins = ck;
 
-    // 作业条目：按日期 + id 并集，只要有一边打了钩就算完成
+    /* 作业条目：按日期 + id 并集。
+       v52：完成状态按「最后一次点击」的时间（doneAt）取新的，不再无条件让 done:true 赢——
+       不然本机取消勾选后，同步会把另一台/云端遗留的 done:true 合并回来，钩子自动复活。
+       老数据没有 doneAt 时保持原来的「有一边打钩就算完成」兜底。 */
     const tk = Object.assign({}, out.tasks || {});
     for (const d in (R.tasks || {})) {
       const mine = (tk[d] || []).slice();
@@ -326,7 +329,17 @@
       for (const t of R.tasks[d]) {
         const e = map.get(t.id);
         if (!e) { map.set(t.id, t); add = true; }
-        else if (t.done && !e.done) { map.set(t.id, Object.assign({}, e, { done: true })); add = true; }
+        else if (!!t.done !== !!e.done) {
+          const rt = TS(t.doneAt), lt = TS(e.doneAt);
+          if (rt > lt) {                    /* 远端最后点的：跟它走（勾上或取消都算） */
+            map.set(t.id, Object.assign({}, e, { done: !!t.done, doneAt: t.doneAt }));
+            add = true;
+          } else if (rt === lt && t.done && !e.done) {
+            /* 两边都没有时间戳（老数据）：维持旧规则，至少不会把已完成的弄丢 */
+            map.set(t.id, Object.assign({}, e, { done: true }));
+            add = true;
+          }
+        }
       }
       if (add) { tk[d] = Array.from(map.values()); mark(); }
     }
@@ -2964,7 +2977,11 @@
     },
     'toggle-task'(el) {
       const t = tasks(today()).find(x => x.id === el.dataset.id); if (!t) return;
-      t.done = !t.done; save(); render();
+      t.done = !t.done;
+      /* v52：记下最后一次勾选/取消的时间。同步合并时按时间取新的，
+         否则本机取消勾选会被另一台（或云端旧数据）的 done:true 又盖回来 */
+      t.doneAt = Date.now();
+      save(); render();
       if (t.done) Sound.tick(); else Sound.click();
       const list = tasks(today());
       if (list.length && list.every(x => x.done)) { toast('全部完成啦，记得打卡'); confetti(); }
@@ -3324,7 +3341,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v51 · 基础任务设置移入设置页</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v52 · 取消勾选不会被同步复活</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
