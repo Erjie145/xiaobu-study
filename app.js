@@ -3205,6 +3205,11 @@
       if (!S.keepDraft || !S.draft) S.draft = JSON.parse(JSON.stringify(db.settings));
       S.keepDraft = false;
       const d = S.draft;
+      /* v53：把草稿里的音量统一成 0-100（滑块的量纲）。以前 draft.soundVolume 直接是
+         db 里的 0~1 小数，只要没碰滑块就点保存，save-settings 会把它再除一次 100，
+         音量越存越小直到 0% —— 音效明明「开启」却一点声音都没有。 */
+      if (d.soundVolume == null) d.soundVolume = 50;
+      else if (parseFloat(d.soundVolume) <= 1) d.soundVolume = Math.round(parseFloat(d.soundVolume) * 100);
       const voiceOpts = '<option value="">自动选择最佳人声</option>' + englishVoices().map(v =>
         '<option value="' + esc(v.voiceURI) + '"' + (d.voiceURI === v.voiceURI ? ' selected' : '') + '>' +
         esc((v.name || 'Voice') + ' · ' + v.lang) + '</option>').join('');
@@ -3216,7 +3221,7 @@
         ['ipad_h', '只锁横屏（竖过来也不换布局）'],
         ['auto', '自适应窗口（铺满屏幕）']
       ].map(o => '<option value="' + o[0] + '"' + ((d.canvas || 'follow') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('');
-      const vol = d.soundVolume == null ? 50 : Math.round(d.soundVolume * 100);
+      const vol = Math.max(0, Math.min(100, Math.round(d.soundVolume)));   /* v53：草稿里已是 0-100 */
       const zhSel = String(d.zhVoiceURI || '');
       const zhVoiceOpts =
         '<option value="pet"' + (zhSel === '' || zhSel === 'pet' ? ' selected' : '') + '>天禄的声音（推荐 · 和宠物同一个声音）</option>' +
@@ -3341,7 +3346,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v52 · 取消勾选不会被同步复活</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v53 · 音量不再越存越小</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
@@ -3470,7 +3475,10 @@
       db.settings.canvas = CANVAS[d.canvas] !== undefined ? d.canvas : 'ipad11';
       db.settings.sound = !(d.sound === '0' || d.sound === 0 || d.sound === false);
       const sv = parseFloat(d.soundVolume);
-      let volv = Math.min(1, Math.max(0, (isNaN(sv) ? 50 : sv) / 100));
+      /* v53：草稿里现在是 0-100（滑块量纲），直接除以 100；
+         万一还是老的 0~1 小数（旧版本存下来的草稿），1 以上才算百分比，别再除一次 */
+      let volv = isNaN(sv) ? 0.5 : (sv > 1 ? sv / 100 : sv);
+      volv = Math.min(1, Math.max(0, volv));
       /* v49：音量拖到 0 时给一个最小音量。真要静音请用上面的「关闭」——
          以前拖到 0 会和「关掉音效」看起来一样，孩子以为开关坏了。 */
       if (volv === 0) volv = 0.35;
