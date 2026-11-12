@@ -2315,34 +2315,133 @@
   }
 
   /* ---------------- 拍照批改：OCR 文本解析 ---------------- */
+  /* v54：OCR 常把一道题拆成好几行（竖式被拆成「36 / × 24 / 864」、答案换行、
+     题号紧贴算式），以前逐行解析会碎成一行一行、批改也跟着错。数学模式分三步：
+     1) 拼行 —— 行尾是运算符或 =、行首是 = / 运算符的，跟相邻行拼成一道题；
+     2) 归答案 —— 拼不进算式的孤立数字（竖式的部分积、最终答案）归给上一题，
+        竖式取最下面那个数当答案；竖式的分隔横线整行丢掉；
+     3) 切多题 —— 一行里挤了两道题（"3.6+2.7=6.3 5-1=4"）也能拆开；
+        行首题号（1. / 2、/ (3) / ①）剥掉再解析，剥完能算出答案才算剥对了。 */
   function parseOcrText(text, subject) {
     const sub = subject || '数学';
     const rows = [];
-    String(text || '').split('\n').map(x => x.trim()).filter(Boolean).forEach(line => {
-      if (line.indexOf('|') >= 0) {
-        const p = line.split('|').map(x => x.trim());
-        if (p[0]) rows.push({ q: p[0], mine: p[1] || '', correct: p[2] || '' });
-        return;
-      }
-      if (sub === '数学') {
-        // 形如 "3.6 + 2.7 = 6.3"：自动算出正确答案，OCR 出的数当作孩子写的答案
-        const m = /^(.+?)\s*[=＝]\s*([\d.\/\-]+)\s*$/.exec(line);
-        if (m) {
-          const expr = m[1].trim(), mine = m[2].trim(), correct = calcExpr(expr);
-          if (correct !== null && /[+\-×÷xX*/]/.test(expr)) {
-            rows.push({ q: expr + ' =', mine: mine, correct: String(correct) });
-            return;
-          }
-        }
-        // 只有算式、还没写答案
-        const bare = line.replace(/[=＝?？]\s*$/, '').trim();
-        const c2 = calcExpr(bare);
-        if (c2 !== null && /[+\-×÷xX*/]/.test(bare)) {
-          rows.push({ q: bare + ' =', mine: '', correct: String(c2) });
+    const lines = String(text || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+
+    /* 语文 / 英语：一行一条，支持 题目|我的答案|正确答案 */
+    if (sub !== '数学') {
+      lines.forEach(line => {
+        if (line.indexOf('|') >= 0) {
+          const p = line.split('|').map(x => x.trim());
+          if (p[0]) rows.push({ q: p[0], mine: p[1] || '', correct: p[2] || '' });
           return;
         }
+        rows.push({ q: line, mine: '', correct: '' });
+      });
+      return rows;
+    }
+
+    /* ---------- 数学 ---------- */
+    const isOpCh = c => c && '+-×÷xX*/'.indexOf(c) >= 0;
+    const isAnswer = s => /^-?[\d.]+(\/[\d.]+)?$/.test(s) && /\d/.test(s);
+    /* 题号剥离：数字+点/顿号后必须跟空格或非数字，避免把小数 3.6 的 "3." 当题号 */
+    const stripNo = s => s
+      .replace(/^\s*第\s*\d{1,3}\s*题\s*[\.、．:：]?\s*/, '')
+      .replace(/^\s*[（(]\s*\d{1,3}\s*[)）]\s*/, '')
+      .replace(/^\s*[①-⑳]\s*/, '')
+      .replace(/^\s*\d{1,3}\s*[、．]\s*/, '')
+      .replace(/^\s*\d{1,3}\s*\.\s+/, '')     /* "1. 小明…"：点后有空格才剥 */
+      .trim();
+    /* 紧贴题号（"1.3.6+2.7" 里小数点前混了题号）：只在剥完能算出答案时才采信 */
+    const stripNoHard = s => s.replace(/^\s*\d{1,2}\s*[\.、．]\s*/, '').trim();
+
+    /* 1) 拼行 */
+    const parts = [];
+    lines.forEach(raw => {
+      const line = raw.replace(/＝/g, '=').replace(/＋/g, '+').replace(/－/g, '-');
+      if (/^[\s\-—_~=－–一]+$/.test(line)) return;            /* 竖式分隔横线：整行丢 */
+      const last = parts[parts.length - 1];
+      if (last) {
+        const lastEnd = last.slice(-1), head = line[0];
+        if (lastEnd === '=' || isOpCh(lastEnd)) { parts[parts.length - 1] = last + ' ' + line; return; }
+        if (head === '=') { parts[parts.length - 1] = last + line; return; }
+        if (isOpCh(head) && !(head === '-' && /^-[\d.]/.test(line))) {
+          parts[parts.length - 1] = last + ' ' + line; return;  /* "× 24" 接到上一行的 "36" 上 */
+        }
       }
-      rows.push({ q: line, mine: '', correct: '' });
+      parts.push(line);
+    });
+
+    /* 2) 归答案 */
+    const items = [];
+    let orphan = [];
+    const flushOrphan = () => {
+      if (orphan.length && items.length) {
+        const it = items[items.length - 1];
+        if (!it.mine) it.mine = orphan[orphan.length - 1];   /* 竖式最底下的是最终答案，上面的是部分积 */
+      } else if (orphan.length && !items.length) {
+        orphan.forEach(o => items.push({ q: o, mine: '' })); /* 开头就没算式：保留原文 */
+      }
+      orphan = [];
+    };
+    parts.forEach(p => {
+      if (isAnswer(p) && p.indexOf('=') < 0) { orphan.push(p); return; }
+      flushOrphan();
+      items.push({ q: p, mine: '' });
+    });
+    flushOrphan();
+
+    /* 3) 切多题 + 逐条解析 */
+    const attempt = s => {
+      if (s.indexOf('|') >= 0) {                              /* 手动竖线格式优先 */
+        const p = s.split('|').map(x => x.trim());
+        if (p[0]) { rows.push({ q: p[0], mine: p[1] || '', correct: p[2] || '' }); return true; }
+      }
+      /* 数字后面的常见单位（"3.6 元 + 2.7 元 = 6.3 元"）去掉再算；
+         只动紧跟数字的单位，中文应用题不受影响（那条路 attempt 会失败，原文保留） */
+      s = s.replace(/(\d)\s*(?:元|角|分|米|厘米|毫米|千米|克|千克|吨|升|毫升|个|支|块|只|题|人|次|分钟|小时|天|kg|g|cm|km|m)(?![\u4e00-\u9fa5])/gi, '$1');
+      const m = /^(.+?)\s*=\s*([\d.\/\-]+)\s*$/.exec(s);      /* "3.6 + 2.7 = 6.3" */
+      if (m) {
+        const expr = m[1].trim(), correct = calcExpr(expr);
+        if (correct !== null && /[+\-×÷xX*/]/.test(expr)) {
+          rows.push({ q: expr + ' =', mine: m[2].trim(), correct: String(correct) });
+          return true;
+        }
+      }
+      const bare = s.replace(/[\s=?？]+$/, '').trim();        /* 只有算式（可带 = ? 结尾），还没写答案 */
+      const c2 = calcExpr(bare);
+      if (c2 !== null && /[+\-×÷xX*/]/.test(bare)) {
+        rows.push({ q: bare + ' =', mine: '', correct: String(c2) });
+        return true;
+      }
+      return false;
+    };
+    items.forEach(it => {
+      /* 一行挤了两道题：有两个以上 = 且每段都含运算符才切，切不开就整行算一条 */
+      let segs = [it.q];
+      if ((it.q.match(/=/g) || []).length >= 2) {
+        const found = [];
+        const re = /([^=]+?)\s*=\s*(-?[\d.]+(?:\/\d+)?)/g;
+        let m;
+        while ((m = re.exec(it.q))) found.push({ expr: m[1].trim(), ans: m[2] });
+        if (found.length >= 2 && found.every(o => /[+\-×÷xX*/]/.test(o.expr))) {
+          segs = found.map(o => o.expr + ' = ' + o.ans);
+        }
+      }
+      const before = rows.length;
+      segs.forEach(seg => {
+        const st = stripNo(seg);                              /* 显式题号（点/顿号后有间隔）：先剥 */
+        if (attempt(st)) return;
+        if (st !== seg && attempt(seg)) return;               /* 剥了反而算不出：用原样 */
+        const hard = stripNoHard(seg);
+        if (hard !== seg && attempt(hard)) return;            /* "1.3.6+2.7"：紧贴题号，剥了能算才用 */
+        rows.push({ q: st || seg, mine: '', correct: '' });
+      });
+      /* 孤立数字归并来的答案（竖式）：填给这一条里最后一个还没答案的 */
+      if (it.mine) {
+        for (let i = rows.length - 1; i >= before; i--) {
+          if (!rows[i].mine && rows[i].correct) { rows[i].mine = it.mine; break; }
+        }
+      }
     });
     return rows;
   }
@@ -3346,7 +3445,7 @@
         '<div id="syncBox">' + syncBoxHtml() + '</div>' +
 
         '<div class="divider"></div><div class="section-title">版本与更新</div>' +
-        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v53 · 音量不再越存越小</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
+        '<div class="tiny muted" style="line-height:1.9">当前版本 <b>v54 · 拍照批改不再碎成一行一行</b>（左下角也能看到）。以后我改了功能，点一下「检查更新并刷新」，App 会自己拉最新版，<b>不用删图标重装，打卡记录也不会丢</b>。万一点了还是旧的，再把主屏幕图标删掉、用最新链接重新添加一次即可。</div>' +
         '<div class="btn-row" style="margin-top:10px"><button class="btn ghost sm" data-action="force-update">' + ic('refresh', 'sm') + '检查更新并刷新</button></div>' +
         '<div class="divider"></div><div class="tiny muted">没开启同步时，所有数据只保存在这台设备、不上传任何内容；开启「家庭同步」后，数据存在你自己的 GitHub 私有仓库里，只有你能看到。换设备或清理浏览器数据会丢失记录，重要内容建议偶尔导出备份。</div>' +
         '<div class="divider"></div><div class="section-title">换图标搬数据</div>' +
